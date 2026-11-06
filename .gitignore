@@ -1,0 +1,22 @@
+# Build artifacts & temporary files
+__pycache__/
+*.py[cod]
+*$py.class
+*.log
+*.tmp
+*.bak
+*.swp
+*~
+
+# OS & Editor files
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Large binary dumps (keep firmware/blobs in releases)
+*.iso
+*.img
+*.zip
+*.deb
+*.tar.gz
