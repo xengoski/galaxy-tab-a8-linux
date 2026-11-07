@@ -1,0 +1,3 @@
+#!/bin/sh
+echo "Rebooting back into Droidian..."
+exec systemctl reboot --reboot-argument=recovery

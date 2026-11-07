@@ -1,0 +1,6 @@
+id=droidian-switch
+name=Droidian Dual-Boot Switcher (SM-X205)
+version=v1.0
+versionCode=1
+author=AntigravityBuild
+description=Prevents stock Android from overwriting recovery and adds a 1-tap Action button in Magisk to reboot straight into Droidian Linux on SD card.

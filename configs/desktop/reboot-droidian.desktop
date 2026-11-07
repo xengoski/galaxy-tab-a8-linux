@@ -1,0 +1,8 @@
+[Desktop Entry]
+Name=Reboot Droidian
+Comment=Reboot back into Droidian Linux (recovery slot)
+Exec=pkexec /usr/local/bin/reboot-droidian
+Icon=system-reboot
+Terminal=false
+Type=Application
+Categories=System;

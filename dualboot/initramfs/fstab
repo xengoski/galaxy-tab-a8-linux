@@ -1,0 +1,4 @@
+# UNCONFIGURED FSTAB FOR BASE SYSTEM
+#
+# <file system> <mount point>   <type>  <options>       <dump>  <pass>
+UUID=49AA-1C14 /mnt/android-sdcard vfat rw,uid=32011,gid=32011,umask=0022,utf8,nofail 0 0

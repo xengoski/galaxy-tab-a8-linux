@@ -1,0 +1,8 @@
+[Desktop Entry]
+Name=Boot to Android
+Comment=Reboot tablet back into Android 14 (One UI)
+Exec=pkexec /usr/local/bin/boot-android
+Icon=system-reboot
+Terminal=false
+Type=Application
+Categories=System;

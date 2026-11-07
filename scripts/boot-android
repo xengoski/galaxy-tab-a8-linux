@@ -1,0 +1,4 @@
+#!/bin/sh
+# Reboot straight back to stock Android 14
+echo "Rebooting back into Android 14..."
+exec systemctl reboot
