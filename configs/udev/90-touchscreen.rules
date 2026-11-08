@@ -1,0 +1,51 @@
+# Samsung TSC
+ACTION=="add", KERNEL=="input[0-9]*", SUBSYSTEM=="input", ATTRS{name}=="sec_ts", ENV{ID_INPUT}="1", ENV{ID_INPUT_TOUCHSCREEN}="1"
+
+# Synaptics Clearpad
+ACTION=="add", KERNEL=="input[0-9]*", SUBSYSTEM=="input", ATTRS{name}=="clearpad", ENV{ID_INPUT}="1", ENV{ID_INPUT_TOUCHSCREEN}="1"
+
+# Synaptics Touchpad
+ACTION=="add", KERNEL=="input[0-9]*", SUBSYSTEM=="input", ATTRS{name}=="synaptics", ENV{ID_INPUT}="1", ENV{ID_INPUT_TOUCHSCREEN}="1"
+
+# (FIXME) aw9523b keyboard
+ACTION=="add", KERNEL=="event[0-9]*", SUBSYSTEM=="input", ATTRS{name}=="aw9523b", ENV{ID_INPUT}="1", ENV{ID_INPUT_KEY}="1"
+
+# Goodix-TS
+ACTION=="add", KERNEL=="event[0-9]*", SUBSYSTEM=="input", ATTRS{name}=="goodix-ts", ENV{ID_INPUT}="1", ENV{ID_INPUT_TOUCHSCREEN}="1"
+ACTION=="add", KERNEL=="event[0-9]*", SUBSYSTEM=="input", ATTRS{name}=="goodix_ts", ENV{ID_INPUT}="1", ENV{ID_INPUT_TOUCHSCREEN}="1"
+
+# FingerTipS
+ACTION=="add", KERNEL=="input[0-9]*", SUBSYSTEM=="input", ATTRS{name}=="fts_ts", ENV{ID_INPUT}="1", ENV{ID_INPUT_TOUCHSCREEN}="1"
+
+# Novatek NT36xxx
+ACTION=="add", KERNEL=="input[0-9]*", SUBSYSTEM=="input", ATTRS{name}=="NVTCapacitiveTouchScreen", ENV{ID_INPUT}="1", ENV{ID_INPUT_TOUCHSCREEN}="1"
+
+# Novatek Touchscreen
+ACTION=="add", KERNEL=="input[0-9]*", SUBSYSTEM=="input", ATTRS{name}=="NVT-ts", ENV{ID_INPUT}="1", ENV{ID_INPUT_TOUCHSCREEN}="1"
+
+# Synaptics TCM
+ACTION=="add", KERNEL=="input[0-9]*", SUBSYSTEM=="input", ATTRS{name}=="tcm-i2c", ENV{ID_INPUT}="1", ENV{ID_INPUT_TOUCHSCREEN}="1"
+
+# Synaptics DSX
+ACTION=="add", KERNEL=="input[0-9]*", SUBSYSTEM=="input", ATTRS{name}=="dsx-i2c", ENV{ID_INPUT}="1", ENV{ID_INPUT_TOUCHSCREEN}="1"
+
+# OmniVision TCM
+ACTION=="add", KERNEL=="input[0-9]*", SUBSYSTEM=="input", ATTRS{name}=="omnivision_tcm_touch", ENV{ID_INPUT}="1", ENV{ID_INPUT_TOUCHSCREEN}="1"
+
+# Mediatek generic touch panel
+ACTION=="add", KERNEL=="input[0-9]*", SUBSYSTEM=="input", ATTRS{name}=="mtk-tpd", ENV{ID_INPUT}="1", ENV{ID_INPUT_TOUCHSCREEN}="1"
+
+# Focaltech FTS
+ACTION=="add", KERNEL=="input[0-9]*", SUBSYSTEM=="input", ATTRS{name}=="fts", ENV{ID_INPUT}="1", ENV{ID_INPUT_TOUCHSCREEN}="1"
+
+# Synaptics S3320
+ACTION=="add", KERNEL=="input[0-9]*", SUBSYSTEM=="input", ATTRS{name}=="synaptics,s3320", ENV{ID_INPUT}="1", ENV{ID_INPUT_TOUCHSCREEN}="1"
+
+# Samsung Electronics Touchscreen
+ACTION=="add", KERNEL=="input[0-9]*", SUBSYSTEM=="input", ATTRS{name}=="sec_touchscreen", ENV{ID_INPUT}="1", ENV{ID_INPUT_TOUCHSCREEN}="1"
+
+# Himax HX83102E (Samsung Galaxy Tab A8)
+ACTION=="add", KERNEL=="input[0-9]*|event[0-9]*", SUBSYSTEM=="input", ATTRS{name}=="himax-touchscreen", ENV{ID_INPUT}="1", ENV{ID_INPUT_TOUCHSCREEN}="1"
+
+# Virtual gesture-filtered touchscreen (gta8-input-daemon)
+ACTION=="add|change", KERNEL=="input[0-9]*|event[0-9]*", SUBSYSTEM=="input", ATTRS{name}=="gta8-touch", ENV{ID_INPUT}="1", ENV{ID_INPUT_TOUCHSCREEN}="1"

@@ -1,0 +1,12 @@
+[Unit]
+Description=Load Unisoc / Tab A8 vendor kernel modules from socko
+After=android-mount.service
+Before=lxc@android.service bluetooth.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/gta8-load-modules.sh
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,23 @@
+#!/usr/bin/env python3
+import json, subprocess
+
+try:
+    out = subprocess.check_output(["mmcli", "-m", "0", "-J"], stderr=subprocess.DEVNULL, text=True, timeout=2)
+    d = json.loads(out).get("modem", {})
+    g = d.get("generic", {})
+    t3 = d.get("3gpp", {})
+    state = g.get("state", "unknown")
+    reason = g.get("state-failed-reason", "")
+    tech = ",".join(g.get("access-technologies", []) or [])
+    sig = g.get("signal-quality", {}).get("value", "0")
+    rev = g.get("revision", "")
+    op = t3.get("operator-name") or t3.get("operator-code") or ""
+    if state in ("connected", "registered", "searching", "enabled"):
+        label = op if op else (tech.upper() or state)
+        print(json.dumps({"text": f"📶 {label} {sig}%", "tooltip": f"Modem: {state} ({tech}) {op}", "class": "connected"}))
+    elif reason == "sim-missing" or state == "failed":
+        print(json.dumps({"text": "📵 No SIM", "tooltip": f"LTE Modem ready ({rev}) — {reason or state}", "class": "nosim"}))
+    else:
+        print(json.dumps({"text": f"📡 {state}", "tooltip": f"Modem state: {state}", "class": "other"}))
+except Exception as e:
+    print(json.dumps({"text": "📵 Modem", "tooltip": str(e), "class": "off"}))

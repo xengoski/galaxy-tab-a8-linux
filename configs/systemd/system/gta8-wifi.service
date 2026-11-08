@@ -1,0 +1,13 @@
+[Unit]
+Description=Load Unisoc sprdwl_ng Wi-Fi module after Android LXC boot
+Requires=android_boot_completed.service
+After=android_boot_completed.service
+Before=NetworkManager.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/gta8-load-wifi.sh
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

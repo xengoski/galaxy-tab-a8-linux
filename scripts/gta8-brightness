@@ -1,0 +1,19 @@
+#!/bin/sh
+BL=/sys/class/backlight/sprd_backlight/brightness
+MAX=$(cat /sys/class/backlight/sprd_backlight/max_brightness 2>/dev/null || echo 255)
+CUR=$(cat "$BL" 2>/dev/null || echo 80)
+ACT="${1:-cycle}"
+
+case "$ACT" in
+    up) NEW=$((CUR + 32)); [ "$NEW" -gt "$MAX" ] && NEW="$MAX" ;;
+    down) NEW=$((CUR - 32)); [ "$NEW" -lt 12 ] && NEW=12 ;;
+    cycle)
+        if [ "$CUR" -lt 55 ]; then NEW=95
+        elif [ "$CUR" -lt 140 ]; then NEW=175
+        elif [ "$CUR" -lt 225 ]; then NEW="$MAX"
+        else NEW=30
+        fi
+        ;;
+esac
+[ -w "$BL" ] && echo "$NEW" > "$BL" 2>/dev/null || true
+pkill -RTMIN+9 waybar >/dev/null 2>&1 || true

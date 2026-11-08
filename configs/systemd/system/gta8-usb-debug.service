@@ -1,0 +1,14 @@
+[Unit]
+Description=Tab A8 early USB RNDIS debug shell and boot logger
+DefaultDependencies=no
+After=local-fs.target systemd-journald.service
+Before=shutdown.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/sbin/gta8-usb-debug.sh
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
