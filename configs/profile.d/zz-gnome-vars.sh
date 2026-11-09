@@ -1,0 +1,10 @@
+#!/bin/sh
+export XDG_CURRENT_DESKTOP=GNOME:Wayfire
+export XDG_SESSION_DESKTOP=gnome
+export XDG_MENU_PREFIX=gnome-
+export QT_QPA_PLATFORMTHEME=gnome
+unset QT_STYLE_OVERRIDE
+export GSK_RENDERER=gl
+export GDK_GL=gles
+export COGL_DISABLE_MAPBUFFERRANGE=true
+export HYBRIS_PATCH_TLS=1

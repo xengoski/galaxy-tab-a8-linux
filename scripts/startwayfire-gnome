@@ -1,0 +1,32 @@
+#!/bin/sh
+[ -f /etc/profile ] && . /etc/profile
+[ -f "$HOME/.profile" ] && . "$HOME/.profile"
+
+export XDG_SESSION_TYPE=wayland
+export XDG_CURRENT_DESKTOP=GNOME:Wayfire
+export XDG_SESSION_DESKTOP=gnome
+export XDG_MENU_PREFIX=gnome-
+export GSK_RENDERER=gl
+export GDK_GL=gles
+export COGL_DISABLE_MAPBUFFERRANGE=true
+export HYBRIS_PATCH_TLS=1
+export EGL_PLATFORM=hwcomposer
+export WLR_BACKENDS="hwcomposer,libinput"
+export WLR_HWC_SKIP_VERSION_CHECK=1
+export MOZ_ENABLE_WAYLAND=1
+export QT_QPA_PLATFORM=wayland
+export QT_QPA_PLATFORMTHEME=gnome
+unset QT_STYLE_OVERRIDE PLASMA_INTEGRATION_USE_PORTAL PLASMA_PLATFORM KDE_NO_KWIN
+
+if [ ! -e "/home/$USER/.config/gta8-gnome/wayfire.ini" ]; then
+    mkdir -p "/home/$USER/.config/gta8-gnome"
+    cp /etc/gta8-gnome/wayfire.ini "/home/$USER/.config/gta8-gnome/wayfire.ini"
+    chmod u+w "/home/$USER/.config/gta8-gnome/wayfire.ini"
+fi
+
+if [ -S "${XDG_RUNTIME_DIR}/bus" ]; then
+    export DBUS_SESSION_BUS_ADDRESS="unix:path=${XDG_RUNTIME_DIR}/bus"
+    exec env LD_PRELOAD="libglesshadercache.so:/usr/local/lib/libhwc64fix.so" wayfire -c "/home/$USER/.config/gta8-gnome/wayfire.ini"
+else
+    exec dbus-run-session env LD_PRELOAD="libglesshadercache.so:/usr/local/lib/libhwc64fix.so" wayfire -c "/home/$USER/.config/gta8-gnome/wayfire.ini"
+fi

@@ -1,0 +1,44 @@
+[Unit]
+Description=GNOME Tablet Desktop (Wayfire + hwcomposer Mali-G52)
+Conflicts=getty@tty1.service
+After=getty@tty1.service rc-local.service plymouth-quit-wait.service systemd-user-sessions.service
+After=dbus.socket session-c1.scope lxc@android.service android-service@hwcomposer.service
+Wants=dbus.socket
+BindsTo=android-service@hwcomposer.service
+Requires=android-service@hwcomposer.service
+Before=graphical.target
+OnFailure=getty@tty1.service
+ConditionPathExists=/dev/tty0
+
+[Service]
+Environment=LANG=C.UTF-8
+Environment=XDG_SESSION_TYPE=wayland
+Environment=XDG_CURRENT_DESKTOP=GNOME:Wayfire
+Environment=XDG_SESSION_DESKTOP=gnome
+Environment=WLR_BACKENDS=hwcomposer,libinput
+Environment=EGL_PLATFORM=hwcomposer
+Environment=WLR_HWC_SKIP_VERSION_CHECK=1
+Environment=HYBRIS_PATCH_TLS=1
+Environment=LD_PRELOAD=libglesshadercache.so:/usr/local/lib/libhwc64fix.so
+User=droidian
+PAMName=login
+WorkingDirectory=~
+ExecStartPre=+/bin/chmod 0666 /sys/class/backlight/sprd_backlight/brightness
+ExecStart=/usr/local/bin/startwayfire-gnome
+ExecStartPost=+chvt 7
+SuccessExitStatus=255
+TimeoutStartSec=30
+Restart=always
+RestartSec=5s
+TTYPath=/dev/tty7
+TTYReset=yes
+TTYVHangup=yes
+TTYVTDisallocate=yes
+StandardInput=tty-fail
+StandardOutput=journal
+StandardError=journal
+UtmpIdentifier=tty7
+UtmpMode=user
+
+[Install]
+WantedBy=graphical.target

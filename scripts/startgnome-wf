@@ -1,0 +1,61 @@
+#!/bin/sh
+[ -f /etc/profile ] && . /etc/profile
+
+# IMPORTANT: clear libhwc64fix.so for desktop apps; keep Mali TLS padding + shader cache!
+export LD_PRELOAD="libtls-padding.so:libgtk6216workaround.so:libglesshadercache.so"
+export HYBRIS_PATCH_TLS=1
+export EGL_PLATFORM=wayland
+export MOZ_ENABLE_WAYLAND=1
+export XDG_SESSION_TYPE=wayland
+export XDG_CURRENT_DESKTOP=GNOME:Wayfire
+export XDG_SESSION_DESKTOP=gnome
+export XDG_MENU_PREFIX=gnome-
+export GSK_RENDERER=gl
+export GDK_GL=gles
+export COGL_DISABLE_MAPBUFFERRANGE=true
+export QT_QPA_PLATFORM=wayland
+export QT_QPA_PLATFORMTHEME=gnome
+export QT_IM_MODULE=textinputv3
+export XDG_DATA_DIRS="/home/droidian/.local/share/flatpak/exports/share:/var/lib/flatpak/exports/share:/usr/local/share:/usr/share"
+unset QT_STYLE_OVERRIDE PLASMA_INTEGRATION_USE_PORTAL PLASMA_PLATFORM KDE_NO_KWIN
+
+if [ -S "${XDG_RUNTIME_DIR}/bus" ]; then
+    export DBUS_SESSION_BUS_ADDRESS="unix:path=${XDG_RUNTIME_DIR}/bus"
+fi
+
+/usr/local/bin/gta8-power-toggle on || true
+
+dbus-update-activation-environment --systemd WAYLAND_DISPLAY XDG_SESSION_TYPE XDG_CURRENT_DESKTOP XDG_SESSION_DESKTOP XDG_MENU_PREFIX XDG_DATA_DIRS GSK_RENDERER GDK_GL COGL_DISABLE_MAPBUFFERRANGE HYBRIS_PATCH_TLS EGL_PLATFORM MOZ_ENABLE_WAYLAND QT_QPA_PLATFORM QT_QPA_PLATFORMTHEME LD_PRELOAD DBUS_SESSION_BUS_ADDRESS >/dev/null 2>&1 || true
+systemctl --user import-environment WAYLAND_DISPLAY XDG_SESSION_TYPE XDG_CURRENT_DESKTOP XDG_SESSION_DESKTOP XDG_MENU_PREFIX XDG_DATA_DIRS GSK_RENDERER GDK_GL COGL_DISABLE_MAPBUFFERRANGE HYBRIS_PATCH_TLS EGL_PLATFORM MOZ_ENABLE_WAYLAND QT_QPA_PLATFORM QT_QPA_PLATFORMTHEME LD_PRELOAD DBUS_SESSION_BUS_ADDRESS >/dev/null 2>&1 || true
+
+gsettings set org.gnome.desktop.interface color-scheme "prefer-dark" 2>/dev/null || true
+gsettings set org.gnome.desktop.interface gtk-theme "WhiteSur-Dark" 2>/dev/null || true
+gsettings set org.gnome.desktop.interface icon-theme "WhiteSur-dark" 2>/dev/null || true
+gsettings set org.gnome.desktop.interface cursor-theme "Adwaita" 2>/dev/null || true
+gsettings set org.gnome.desktop.interface font-name "Cantarell 11" 2>/dev/null || true
+gsettings set org.gnome.desktop.wm.preferences button-layout "close,minimize,maximize:" 2>/dev/null || true
+gsettings set org.gnome.nautilus.preferences click-policy "single" 2>/dev/null || true
+gsettings set org.gnome.settings-daemon.plugins.power sleep-inactive-ac-type "nothing" 2>/dev/null || true
+gsettings set org.gnome.settings-daemon.plugins.power sleep-inactive-battery-type "nothing" 2>/dev/null || true
+gsettings set org.gnome.desktop.session idle-delay 0 2>/dev/null || true
+
+eval "$(gnome-keyring-daemon --start --components=secrets,pkcs11 2>/dev/null)" || true
+export GNOME_KEYRING_CONTROL SSH_AUTH_SOCK
+
+pkill -u "$USER" -f "waybar|mako|swaybg|swayidle|gta8-keyboard|polkit-mate-authentication-agent|gsd-|gta8-dock" >/dev/null 2>&1 || true
+
+swaybg -i /usr/share/backgrounds/gnome/adwaita-d.jpg -m fill >/dev/null 2>&1 &
+/usr/libexec/polkit-mate-authentication-agent-1 >/dev/null 2>&1 &
+/usr/local/bin/gta8-keyboard daemon >/dev/null 2>&1 &
+swayidle -w timeout 600 "/usr/local/bin/gta8-power-toggle off" resume "/usr/local/bin/gta8-power-toggle on" >/dev/null 2>&1 &
+/usr/bin/mako >/dev/null 2>&1 &
+/usr/bin/waybar >/dev/null 2>&1 &
+/usr/local/bin/gta8-dock >/dev/null 2>&1 &
+
+for gsd in gsd-xsettings gsd-media-keys gsd-rfkill gsd-sound gsd-wwan gsd-color gsd-a11y-settings; do
+    [ -x "/usr/libexec/$gsd" ] && "/usr/libexec/$gsd" >/dev/null 2>&1 &
+done
+
+systemctl --user --no-block restart xdg-desktop-portal.service >/dev/null 2>&1 || true
+
+wait
