@@ -1,0 +1,7 @@
+[
+  {"name": "Screen Off", "exec": "/usr/local/bin/gta8-power-toggle off", "icon": "display-brightness-symbolic"},
+  {"name": "Lock", "exec": "/usr/local/bin/gta8-lockscreen", "icon": "system-lock-screen-symbolic"},
+  {"name": "Reboot Android", "exec": "/usr/local/bin/boot-android", "icon": "phone-symbolic"},
+  {"name": "Reboot Droidian", "exec": "/usr/local/bin/reboot-droidian", "icon": "system-reboot-symbolic"},
+  {"name": "Power Off", "exec": "systemctl poweroff", "icon": "system-shutdown-symbolic"}
+]

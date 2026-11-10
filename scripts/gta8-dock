@@ -1,0 +1,259 @@
+#!/usr/bin/env python3
+import json, os, signal, socket, subprocess, sys
+import gi
+gi.require_version("Gdk", "3.0")
+gi.require_version("Gtk", "3.0")
+gi.require_version("GtkLayerShell", "0.1")
+from gi.repository import Gdk, Gio, GLib, Gtk, GtkLayerShell
+
+SOCK = os.environ.get("WAYFIRE_SOCKET") or f"/run/user/{os.getuid()}/wayfire-wayland-0-.socket"
+
+PINNED_CANDIDATES = [
+    ("helium.desktop", ["helium", "chromium"]),
+    ("de.schmidhuberj.tubefeeder.desktop", ["tubefeeder", "pipeline"]),
+    ("org.gnome.Nautilus.desktop", ["org.gnome.nautilus", "nautilus"]),
+    ("org.gnome.Snapshot.desktop", ["org.gnome.snapshot", "snapshot"]),
+    ("org.kde.konsole.desktop", ["konsole", "org.kde.konsole"]),
+    ("org.gnome.Settings.desktop", ["org.gnome.settings", "gnome-control-center"]),
+    ("org.gnome.Software.desktop", ["org.gnome.software"]),
+]
+
+CSS = b"""
+window {
+    background-color: transparent;
+}
+box.dock-pill {
+    background-color: rgba(24, 26, 32, 0.56);
+    border: 1px solid rgba(255, 255, 255, 0.18);
+    border-radius: 22px;
+    padding: 5px 10px;
+}
+box.mini-pill {
+    background-color: rgba(24, 26, 32, 0.54);
+    border: 1px solid rgba(255, 255, 255, 0.22);
+    border-radius: 99px;
+    padding: 2px 18px;
+}
+button.dock-btn {
+    background: transparent;
+    border: none;
+    border-radius: 14px;
+    padding: 5px 7px;
+}
+button.dock-btn:hover, button.dock-btn:active {
+    background-color: rgba(255, 255, 255, 0.18);
+}
+button.dock-btn.running {
+    background-color: rgba(255, 255, 255, 0.10);
+}
+label.dot {
+    color: #0a84ff;
+    font-size: 9px;
+    margin-top: -4px;
+    margin-bottom: -4px;
+}
+label.dot.focused {
+    color: #ffffff;
+}
+separator.dock-sep {
+    background-color: rgba(255, 255, 255, 0.18);
+    min-width: 1px;
+    margin: 8px 4px;
+}
+"""
+
+def list_wf_views():
+    try:
+        s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        s.settimeout(0.6)
+        s.connect(SOCK)
+        msg = json.dumps({"method": "window-rules/list-views"}).encode()
+        s.sendall(len(msg).to_bytes(4, "little") + msg)
+        hdr = s.recv(4)
+        if len(hdr) < 4:
+            s.close(); return []
+        ln = int.from_bytes(hdr, "little")
+        buf = b""
+        while len(buf) < ln:
+            c = s.recv(ln - len(buf))
+            if not c: break
+            buf += c
+        s.close()
+        return [v for v in json.loads(buf.decode()) if v.get("type") == "toplevel" and v.get("mapped")]
+    except Exception:
+        return []
+
+def focus_view(vid):
+    try:
+        s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        s.settimeout(0.6)
+        s.connect(SOCK)
+        msg = json.dumps({"method": "window-rules/focus-view", "data": {"id": vid}}).encode()
+        s.sendall(len(msg).to_bytes(4, "little") + msg)
+        s.recv(4)
+        s.close()
+    except Exception:
+        pass
+
+class GnomeDock(Gtk.Window):
+    def __init__(self):
+        super().__init__()
+        GtkLayerShell.init_for_window(self)
+        GtkLayerShell.set_layer(self, GtkLayerShell.Layer.TOP)
+        GtkLayerShell.set_namespace(self, "gta8-dock")
+        GtkLayerShell.set_anchor(self, GtkLayerShell.Edge.BOTTOM, True)
+        GtkLayerShell.set_margin(self, GtkLayerShell.Edge.BOTTOM, 6)
+        GtkLayerShell.set_exclusive_zone(self, 68)
+
+        prov = Gtk.CssProvider()
+        prov.load_from_data(CSS)
+        Gtk.StyleContext.add_provider_for_screen(Gdk.Screen.get_default(), prov, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
+
+        self.collapsed = False
+        self.outer = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
+        self.add(self.outer)
+
+        self.dock_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
+        self.dock_box.get_style_context().add_class("dock-pill")
+        self.outer.pack_start(self.dock_box, False, False, 0)
+
+        self.mini_btn = Gtk.Button()
+        self.mini_btn.get_style_context().add_class("dock-btn")
+        self.mini_btn.set_image(Gtk.Image.new_from_icon_name("pan-up-symbolic", Gtk.IconSize.MENU))
+        self.mini_btn.connect("clicked", lambda *_: self.set_collapsed(False))
+        self.mini_box = Gtk.Box()
+        self.mini_box.get_style_context().add_class("mini-pill")
+        self.mini_box.add(self.mini_btn)
+        self.mini_box.set_no_show_all(True)
+        self.outer.pack_start(self.mini_box, False, False, 0)
+
+        self.all_apps = {a.get_id().lower(): a for a in Gio.AppInfo.get_all() if a.get_id()}
+        self.pinned = []
+        for did, aliases in PINNED_CANDIDATES:
+            app = Gio.DesktopAppInfo.new(did)
+            if not app and did == "org.gnome.Console.desktop":
+                app = Gio.DesktopAppInfo.new("org.gnome.Terminal.desktop")
+            if app:
+                self.pinned.append((app, aliases))
+
+        self.last_sig = None
+        self.rebuild()
+        GLib.timeout_add(900, self.refresh)
+        self.show_all()
+
+    def set_collapsed(self, col):
+        self.collapsed = col
+        if col:
+            self.dock_box.hide()
+            self.mini_box.show()
+            self.mini_btn.show()
+            GtkLayerShell.set_exclusive_zone(self, 0)
+        else:
+            self.mini_box.hide()
+            self.dock_box.show_all()
+            GtkLayerShell.set_exclusive_zone(self, 68)
+
+    def match_app(self, app_id):
+        low = (app_id or "").lower()
+        for did, app in self.all_apps.items():
+            if did.replace(".desktop", "") == low or low in did:
+                return app
+        return None
+
+    def make_tile(self, gicon, icon_name, label_tip, running_vid, focused, cb):
+        vbox = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
+        if gicon is not None:
+            img = Gtk.Image.new_from_gicon(gicon, Gtk.IconSize.DND)
+        else:
+            img = Gtk.Image.new_from_icon_name(icon_name or "application-x-executable", Gtk.IconSize.DND)
+        img.set_pixel_size(38)
+        vbox.pack_start(img, False, False, 0)
+        dot = Gtk.Label(label="●" if running_vid is not None else " ")
+        dot.get_style_context().add_class("dot")
+        if focused:
+            dot.get_style_context().add_class("focused")
+        vbox.pack_start(dot, False, False, 0)
+
+        btn = Gtk.Button()
+        btn.set_tooltip_text(label_tip)
+        btn.get_style_context().add_class("dock-btn")
+        if running_vid is not None:
+            btn.get_style_context().add_class("running")
+        btn.add(vbox)
+        btn.connect("clicked", cb)
+        return btn
+
+    def rebuild(self, views=None):
+        if views is None:
+            views = list_wf_views()
+        for ch in list(self.dock_box.get_children()):
+            self.dock_box.remove(ch)
+
+        used_vids = set()
+        for app, aliases in self.pinned:
+            match = None
+            for v in views:
+                aid = (v.get("app-id") or "").lower()
+                if any(al in aid for al in aliases):
+                    match = v; break
+            vid = match["id"] if match else None
+            foc = bool(match and match.get("activated"))
+            if vid is not None:
+                used_vids.add(vid)
+            def on_click(_, a=app, m_vid=vid):
+                if m_vid is not None:
+                    focus_view(m_vid)
+                else:
+                    a.launch([], Gdk.Display.get_default().get_app_launch_context())
+            self.dock_box.pack_start(
+                self.make_tile(app.get_icon(), None, app.get_display_name(), vid, foc, on_click),
+                False, False, 0
+            )
+
+        extra = [v for v in views if v["id"] not in used_vids]
+        if extra:
+            sep = Gtk.Separator(orientation=Gtk.Orientation.VERTICAL)
+            sep.get_style_context().add_class("dock-sep")
+            self.dock_box.pack_start(sep, False, False, 0)
+            for v in extra:
+                app = self.match_app(v.get("app-id"))
+                gicon = app.get_icon() if app else None
+                tip = v.get("title") or v.get("app-id") or "Window"
+                vid = v["id"]
+                self.dock_box.pack_start(
+                    self.make_tile(gicon, "application-x-executable", tip, vid, bool(v.get("activated")), lambda _, i=vid: focus_view(i)),
+                    False, False, 0
+                )
+
+        sep2 = Gtk.Separator(orientation=Gtk.Orientation.VERTICAL)
+        sep2.get_style_context().add_class("dock-sep")
+        self.dock_box.pack_start(sep2, False, False, 0)
+
+        self.dock_box.pack_start(
+            self.make_tile(None, "view-app-grid-symbolic", "Show Applications", None, False,
+                           lambda *_: subprocess.Popen(["/usr/local/bin/gta8-app-grid"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)),
+            False, False, 0
+        )
+
+        col_btn = Gtk.Button()
+        col_btn.set_tooltip_text("Hide Dock")
+        col_btn.get_style_context().add_class("dock-btn")
+        col_btn.set_image(Gtk.Image.new_from_icon_name("pan-down-symbolic", Gtk.IconSize.MENU))
+        col_btn.connect("clicked", lambda *_: self.set_collapsed(True))
+        self.dock_box.pack_start(col_btn, False, False, 0)
+
+        if not self.collapsed:
+            self.dock_box.show_all()
+
+    def refresh(self):
+        views = list_wf_views()
+        sig = tuple((v["id"], v.get("app-id"), bool(v.get("activated"))) for v in views)
+        if sig != self.last_sig:
+            self.last_sig = sig
+            self.rebuild(views)
+        return True
+
+dock = GnomeDock()
+signal.signal(signal.SIGUSR1, lambda *_: GLib.idle_add(lambda: dock.set_collapsed(not dock.collapsed)))
+signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
+Gtk.main()

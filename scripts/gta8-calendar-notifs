@@ -1,0 +1,226 @@
+#!/usr/bin/env python3
+import datetime, os, re, signal, subprocess, sys
+import gi
+gi.require_version("Gdk", "3.0")
+gi.require_version("Gtk", "3.0")
+gi.require_version("GtkLayerShell", "0.1")
+from gi.repository import Gdk, Gtk, GtkLayerShell
+
+PIDFILE = f"/run/user/{os.getuid()}/gta8-cal-notifs.pid"
+if os.path.exists(PIDFILE):
+    try:
+        old = int(open(PIDFILE).read().strip())
+        os.kill(old, signal.SIGTERM)
+        sys.exit(0)
+    except Exception:
+        pass
+with open(PIDFILE, "w") as f:
+    f.write(str(os.getpid()))
+
+CSS = b"""
+window {
+    background-color: rgba(24, 26, 32, 0.62);
+    color: #ffffff;
+    border: 1px solid rgba(255, 255, 255, 0.18);
+    border-radius: 24px;
+    font-family: Cantarell, sans-serif;
+}
+box.pane {
+    background-color: rgba(255, 255, 255, 0.05);
+    border-radius: 16px;
+    padding: 12px;
+}
+box.notif-card {
+    background-color: rgba(255, 255, 255, 0.09);
+    border-radius: 14px;
+    padding: 10px 12px;
+}
+label.muted {
+    color: rgba(255, 255, 255, 0.68);
+    font-size: 12px;
+}
+label.heading {
+    font-size: 17px;
+    font-weight: 700;
+}
+button.pill {
+    background-color: rgba(255, 255, 255, 0.12);
+    color: #ffffff;
+    border: none;
+    border-radius: 99px;
+    padding: 6px 14px;
+    font-weight: 600;
+}
+button.pill:hover, button.pill:active {
+    background-color: #0a84ff;
+}
+calendar {
+    background-color: transparent;
+    color: #ffffff;
+    border: none;
+    font-size: 13px;
+}
+calendar:selected {
+    background-color: #0a84ff;
+    color: #ffffff;
+    border-radius: 99px;
+}
+calendar.header {
+    color: #ffffff;
+}
+"""
+
+def parse_mako(cmd):
+    items = []
+    try:
+        out = subprocess.check_output(["makoctl", cmd], stderr=subprocess.DEVNULL, text=True, timeout=2)
+    except Exception:
+        return items
+    cur = None
+    for line in out.splitlines():
+        m = re.match(r"^Notification (\d+):\s*(.*)$", line)
+        if m:
+            if cur:
+                items.append(cur)
+            cur = {"id": int(m.group(1)), "summary": m.group(2).strip(), "app": "System", "body": ""}
+        elif cur and line.strip().startswith("App name:"):
+            cur["app"] = line.split(":", 1)[1].strip()
+        elif cur and line.strip().startswith("Body:"):
+            cur["body"] = line.split(":", 1)[1].strip()
+    if cur:
+        items.append(cur)
+    return items
+
+class CalendarNotifs(Gtk.Window):
+    def __init__(self):
+        super().__init__()
+        GtkLayerShell.init_for_window(self)
+        GtkLayerShell.set_layer(self, GtkLayerShell.Layer.OVERLAY)
+        GtkLayerShell.set_namespace(self, "gta8-cal-notifs")
+        GtkLayerShell.set_anchor(self, GtkLayerShell.Edge.TOP, True)
+        GtkLayerShell.set_margin(self, GtkLayerShell.Edge.TOP, 38)
+        GtkLayerShell.set_keyboard_mode(self, GtkLayerShell.KeyboardMode.ON_DEMAND)
+
+        prov = Gtk.CssProvider()
+        prov.load_from_data(CSS)
+        Gtk.StyleContext.add_provider_for_screen(Gdk.Screen.get_default(), prov, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
+
+        self.set_default_size(600, 340)
+        main_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=14)
+        main_box.set_margin_top(16); main_box.set_margin_bottom(16)
+        main_box.set_margin_start(16); main_box.set_margin_end(16)
+        self.add(main_box)
+
+        # Left column: Notifications + Do Not Disturb + Clear
+        left = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
+        left.get_style_context().add_class("pane")
+        left.set_size_request(290, -1)
+        main_box.pack_start(left, True, True, 0)
+
+        self.notif_scroll = Gtk.ScrolledWindow()
+        self.notif_scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+        self.notif_scroll.set_kinetic_scrolling(True)
+        self.notif_list = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        self.notif_scroll.add(self.notif_list)
+        left.pack_start(self.notif_scroll, True, True, 0)
+        self.load_notifications()
+
+        bot_left = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        dnd_lbl = Gtk.Label(label="Do Not Disturb")
+        dnd_sw = Gtk.Switch()
+        try:
+            modes = subprocess.check_output(["makoctl", "mode"], stderr=subprocess.DEVNULL, text=True, timeout=1)
+            dnd_sw.set_active("do-not-disturb" in modes)
+        except Exception:
+            pass
+        dnd_sw.connect("state-set", lambda _, st: (subprocess.run(["makoctl", "mode", "-a" if st else "-r", "do-not-disturb"], check=False), False)[1])
+        bot_left.pack_start(dnd_lbl, False, False, 0)
+        bot_left.pack_start(dnd_sw, False, False, 4)
+
+        clr_btn = Gtk.Button(label="Clear")
+        clr_btn.get_style_context().add_class("pill")
+        clr_btn.connect("clicked", self.on_clear)
+        bot_left.pack_end(clr_btn, False, False, 0)
+        left.pack_end(bot_left, False, False, 0)
+
+        # Right column: Date Header + Calendar + Clocks/Calendar/Close
+        right = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
+        right.get_style_context().add_class("pane")
+        right.set_size_request(265, -1)
+        main_box.pack_start(right, False, False, 0)
+
+        top_r = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        now = datetime.datetime.now()
+        dlbl = Gtk.Label(label=now.strftime("%A\n%B %d, %Y"))
+        dlbl.set_xalign(0)
+        dlbl.get_style_context().add_class("heading")
+        top_r.pack_start(dlbl, True, True, 0)
+        cls_btn = Gtk.Button()
+        cls_btn.get_style_context().add_class("pill")
+        cls_btn.set_image(Gtk.Image.new_from_icon_name("window-close-symbolic", Gtk.IconSize.BUTTON))
+        cls_btn.connect("clicked", lambda *_: self.quit())
+        top_r.pack_end(cls_btn, False, False, 0)
+        right.pack_start(top_r, False, False, 0)
+
+        cal = Gtk.Calendar()
+        right.pack_start(cal, True, True, 0)
+
+        apps_r = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        for name, exe in (("Clocks", "gnome-clocks"), ("Calendar", "gnome-calendar"), ("Weather", "gnome-weather")):
+            b = Gtk.Button(label=name)
+            b.get_style_context().add_class("pill")
+            b.connect("clicked", lambda _, c=exe: (subprocess.Popen([c], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True), self.quit()))
+            apps_r.pack_start(b, True, True, 0)
+        right.pack_end(apps_r, False, False, 0)
+
+        self.connect("key-press-event", lambda _, e: self.quit() if e.keyval == Gdk.KEY_Escape else False)
+        self.show_all()
+
+    def load_notifications(self):
+        for ch in list(self.notif_list.get_children()):
+            self.notif_list.remove(ch)
+        seen = set()
+        items = []
+        for it in parse_mako("list") + parse_mako("history"):
+            key = (it["id"], it["summary"])
+            if key not in seen:
+                seen.add(key)
+                items.append(it)
+        if not items:
+            empty = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+            empty.set_valign(Gtk.Align.CENTER)
+            empty.set_margin_top(60)
+            empty.pack_start(Gtk.Image.new_from_icon_name("notifications-disabled-symbolic", Gtk.IconSize.DIALOG), False, False, 0)
+            lbl = Gtk.Label(label="No Notifications")
+            lbl.get_style_context().add_class("muted")
+            empty.pack_start(lbl, False, False, 0)
+            self.notif_list.pack_start(empty, True, True, 0)
+        else:
+            for it in items:
+                card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=3)
+                card.get_style_context().add_class("notif-card")
+                h = Gtk.Label(label=it["app"])
+                h.set_xalign(0); h.get_style_context().add_class("muted")
+                s = Gtk.Label(label=it["summary"])
+                s.set_xalign(0); s.set_line_wrap(True)
+                card.pack_start(h, False, False, 0)
+                card.pack_start(s, False, False, 0)
+                if it.get("body"):
+                    b = Gtk.Label(label=it["body"])
+                    b.set_xalign(0); b.set_line_wrap(True); b.get_style_context().add_class("muted")
+                    card.pack_start(b, False, False, 0)
+                self.notif_list.pack_start(card, False, False, 0)
+        self.notif_list.show_all()
+
+    def on_clear(self, *_):
+        subprocess.run(["makoctl", "dismiss", "-a", "-h"], check=False)
+        self.load_notifications()
+
+    def quit(self):
+        try: os.remove(PIDFILE)
+        except Exception: pass
+        Gtk.main_quit()
+
+signal.signal(signal.SIGTERM, lambda *_: (os.path.exists(PIDFILE) and os.remove(PIDFILE), sys.exit(0)))
+CalendarNotifs()
+Gtk.main()

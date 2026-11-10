@@ -1,0 +1,35 @@
+* {
+    font-family: Cantarell, "FontAwesome", sans-serif;
+    font-size: 13px;
+    font-weight: 600;
+    min-height: 0;
+}
+window#waybar {
+    background-color: rgba(18, 20, 26, 0.58);
+    border-bottom: 1px solid rgba(255, 255, 255, 0.12);
+    color: #ffffff;
+}
+#custom-activities, #clock, #custom-osk {
+    padding: 3px 12px;
+    margin: 3px 4px;
+    border-radius: 99px;
+    color: #ffffff;
+    background-color: transparent;
+}
+#custom-activities:hover, #clock:hover, #custom-osk:hover, #system:hover {
+    background-color: rgba(255, 255, 255, 0.14);
+}
+#system {
+    padding: 0 8px;
+    margin: 3px 6px 3px 0;
+    border-radius: 99px;
+    background-color: transparent;
+}
+#network, #bluetooth, #pulseaudio, #battery {
+    padding: 3px 7px;
+    color: #ffffff;
+    background-color: transparent;
+}
+#network.disconnected {
+    color: rgba(255, 255, 255, 0.45);
+}

@@ -1,0 +1,79 @@
+#!/usr/bin/env python3
+import json, os, socket, subprocess, sys
+
+SOCK = os.environ.get("WAYFIRE_SOCKET") or f"/run/user/{os.getuid()}/wayfire-wayland-0-.socket"
+
+def wf_call(method, data=None):
+    s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    s.connect(SOCK)
+    payload = {"method": method}
+    if data is not None:
+        payload["data"] = data
+    msg = json.dumps(payload).encode()
+    s.sendall(len(msg).to_bytes(4, "little") + msg)
+    hdr = s.recv(4)
+    if len(hdr) < 4:
+        s.close()
+        return {}
+    ln = int.from_bytes(hdr, "little")
+    buf = b""
+    while len(buf) < ln:
+        chunk = s.recv(ln - len(buf))
+        if not chunk:
+            break
+        buf += chunk
+    s.close()
+    return json.loads(buf.decode())
+
+cmd = sys.argv[1] if len(sys.argv) > 1 else "status"
+
+if cmd == "overview":
+    print(wf_call("scale/toggle"))
+elif cmd == "workspaces":
+    try:
+        outs = wf_call("window-rules/list-outputs")
+        ws = outs[0].get("workspace", {}) if outs else {}
+        gw = int(ws.get("grid_width", 4))
+        cur = int(ws.get("x", 0))
+        dots = "  ".join("●" if i == cur else "·" for i in range(gw))
+        print(json.dumps({"text": dots, "tooltip": f"Workspace {cur+1}/{gw} — tap for Activities"}))
+    except Exception:
+        print(json.dumps({"text": "●  ·  ·  ·", "tooltip": "Activities"}))
+elif cmd == "focus" and len(sys.argv) > 2:
+    vid = int(sys.argv[2])
+    print(wf_call("window-rules/focus-view", {"id": vid}))
+elif cmd == "rotate-status":
+    try:
+        locked = wf_call("wayfire/get-config-option", {"option": "autorotate-iio/lock_rotation"}).get("value", "false")
+        tf = wf_call("wayfire/get-config-option", {"option": "output:HWCOMPOSER-1/transform"}).get("value", "normal")
+        if str(locked).lower() in ("true", "1"):
+            label = "Landscape" if tf in ("90", "270") else "Portrait"
+            print(json.dumps({"text": f"Locked ({label})", "tooltip": f"Rotation locked ({tf})", "class": "locked"}))
+        else:
+            print(json.dumps({"text": "Auto-Rotate", "tooltip": f"Auto-rotate ON ({tf})", "class": "auto"}))
+    except Exception as e:
+        print(json.dumps({"text": "Auto-Rotate", "tooltip": str(e), "class": "auto"}))
+elif cmd == "rotate-cycle":
+    locked = str(wf_call("wayfire/get-config-option", {"option": "autorotate-iio/lock_rotation"}).get("value", "false")).lower() in ("true", "1")
+    tf = wf_call("wayfire/get-config-option", {"option": "output:HWCOMPOSER-1/transform"}).get("value", "normal")
+    if not locked:
+        wf_call("wayfire/set-config-options", {"autorotate-iio/lock_rotation": True, "output:HWCOMPOSER-1/transform": "90"})
+    elif tf in ("90", "270"):
+        wf_call("wayfire/set-config-options", {"autorotate-iio/lock_rotation": True, "output:HWCOMPOSER-1/transform": "normal"})
+    else:
+        wf_call("wayfire/set-config-options", {"autorotate-iio/lock_rotation": False})
+elif cmd == "osk":
+    try:
+        out = subprocess.check_output([
+            "gdbus", "call", "--session", "--dest", "sm.puri.OSK0",
+            "--object-path", "/sm/puri/OSK0", "--method",
+            "org.freedesktop.DBus.Properties.Get", "sm.puri.OSK0", "Visible"
+        ], stderr=subprocess.DEVNULL, text=True)
+        vis = "true" in out.lower()
+        subprocess.run([
+            "gdbus", "call", "--session", "--dest", "sm.puri.OSK0",
+            "--object-path", "/sm/puri/OSK0", "--method",
+            "sm.puri.OSK0.SetVisible", "false" if vis else "true"
+        ], check=False)
+    except Exception:
+        subprocess.Popen(["/usr/bin/phosh-osk-stevia"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)

@@ -1,0 +1,59 @@
+{
+    "layer": "top",
+    "position": "top",
+    "height": 32,
+    "spacing": 0,
+    "modules-left": ["custom/activities"],
+    "modules-center": ["clock"],
+    "modules-right": ["custom/osk", "group/system"],
+
+    "custom/activities": {
+        "exec": "/usr/local/bin/gta8-wayfire-ipc workspaces",
+        "return-type": "json",
+        "interval": 2,
+        "on-click": "/usr/local/bin/gta8-wayfire-ipc overview"
+    },
+    "clock": {
+        "format": "{:%b %d   %H:%M}",
+        "tooltip": false,
+        "on-click": "/usr/local/bin/gta8-calendar-notifs"
+    },
+    "custom/osk": {
+        "format": "",
+        "tooltip": false,
+        "on-click": "/usr/local/bin/gta8-keyboard toggle"
+    },
+    "group/system": {
+        "orientation": "horizontal",
+        "modules": ["network", "bluetooth", "pulseaudio", "battery"]
+    },
+    "network": {
+        "format-wifi": "",
+        "format-ethernet": "",
+        "format-disconnected": "",
+        "tooltip-format": "{essid}: {ipaddr}",
+        "on-click": "/usr/local/bin/gta8-quick-settings"
+    },
+    "bluetooth": {
+        "format": "",
+        "format-connected": "",
+        "format-off": "",
+        "tooltip-format": "{num_connections} BT connected",
+        "on-click": "/usr/local/bin/gta8-quick-settings"
+    },
+    "pulseaudio": {
+        "format": "",
+        "format-muted": "",
+        "tooltip-format": "Volume {volume}%",
+        "on-click": "/usr/local/bin/gta8-quick-settings"
+    },
+    "battery": {
+        "bat": "battery",
+        "interval": 15,
+        "format": "{icon}  {capacity}%",
+        "format-charging": "  {capacity}%",
+        "format-plugged": "  {capacity}%",
+        "format-icons": ["", "", "", "", ""],
+        "on-click": "/usr/local/bin/gta8-quick-settings"
+    }
+}

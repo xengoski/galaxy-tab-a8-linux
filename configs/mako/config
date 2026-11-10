@@ -1,0 +1,12 @@
+font=Cantarell 12
+background-color=#1c1e24aa
+text-color=#ffffff
+border-color=#0a84ff
+border-size=2
+border-radius=16
+padding=12
+default-timeout=5000
+anchor=top-center
+width=420
+history=1
+max-history=30
