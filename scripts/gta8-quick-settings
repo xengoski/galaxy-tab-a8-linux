@@ -1,0 +1,295 @@
+#!/usr/bin/env python3
+import json, os, signal, subprocess, sys
+import gi
+gi.require_version("Gdk", "3.0")
+gi.require_version("Gtk", "3.0")
+gi.require_version("GtkLayerShell", "0.1")
+from gi.repository import Gdk, GLib, Gtk, GtkLayerShell
+
+PIDFILE = f"/run/user/{os.getuid()}/gta8-quick-settings.pid"
+if os.path.exists(PIDFILE):
+    try:
+        old = int(open(PIDFILE).read().strip())
+        os.kill(old, signal.SIGTERM)
+        sys.exit(0)
+    except Exception:
+        pass
+with open(PIDFILE, "w") as f:
+    f.write(str(os.getpid()))
+
+CSS = b"""
+window {
+    background-color: rgba(24, 26, 32, 0.62);
+    color: #ffffff;
+    border: 1px solid rgba(255, 255, 255, 0.18);
+    border-radius: 24px;
+    font-family: Cantarell, sans-serif;
+}
+button.circle {
+    background-color: rgba(255, 255, 255, 0.12);
+    color: #ffffff;
+    border: none;
+    border-radius: 99px;
+    min-width: 38px;
+    min-height: 38px;
+    padding: 6px;
+}
+button.circle:hover, button.circle:active {
+    background-color: rgba(255, 255, 255, 0.24);
+}
+button.tile {
+    background-color: rgba(255, 255, 255, 0.11);
+    color: #ffffff;
+    border: none;
+    border-radius: 99px;
+    padding: 10px 14px;
+    min-height: 46px;
+}
+button.tile.active {
+    background-color: #0a84ff;
+    color: #ffffff;
+}
+button.power-opt {
+    background-color: rgba(255, 255, 255, 0.10);
+    color: #ffffff;
+    border: none;
+    border-radius: 14px;
+    padding: 10px 12px;
+}
+button.power-opt.danger {
+    background-color: rgba(255, 69, 58, 0.40);
+}
+scale trough {
+    background-color: rgba(255, 255, 255, 0.18);
+    border-radius: 99px;
+    min-height: 10px;
+}
+scale highlight {
+    background-color: #0a84ff;
+    border-radius: 99px;
+}
+scale slider {
+    background-color: #ffffff;
+    border-radius: 99px;
+    min-width: 20px;
+    min-height: 20px;
+}
+"""
+
+def read_file(path, default=""):
+    try:
+        return open(path).read().strip()
+    except Exception:
+        return default
+
+def run_out(cmd):
+    try:
+        return subprocess.check_output(cmd, stderr=subprocess.DEVNULL, text=True, timeout=2).strip()
+    except Exception:
+        return ""
+
+class QuickSettings(Gtk.Window):
+    def __init__(self):
+        super().__init__()
+        GtkLayerShell.init_for_window(self)
+        GtkLayerShell.set_layer(self, GtkLayerShell.Layer.OVERLAY)
+        GtkLayerShell.set_namespace(self, "gta8-quicksettings")
+        GtkLayerShell.set_anchor(self, GtkLayerShell.Edge.TOP, True)
+        GtkLayerShell.set_anchor(self, GtkLayerShell.Edge.RIGHT, True)
+        GtkLayerShell.set_margin(self, GtkLayerShell.Edge.TOP, 38)
+        GtkLayerShell.set_margin(self, GtkLayerShell.Edge.RIGHT, 8)
+        GtkLayerShell.set_keyboard_mode(self, GtkLayerShell.KeyboardMode.ON_DEMAND)
+
+        prov = Gtk.CssProvider()
+        prov.load_from_data(CSS)
+        Gtk.StyleContext.add_provider_for_screen(Gdk.Screen.get_default(), prov, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
+
+        self.set_default_size(344, -1)
+        root = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=14)
+        root.set_margin_top(16); root.set_margin_bottom(16)
+        root.set_margin_start(16); root.set_margin_end(16)
+        self.add(root)
+
+        hdr = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        cap = read_file("/sys/class/power_supply/battery/capacity", "?")
+        stat = read_file("/sys/class/power_supply/battery/status", "")
+        bat_icon = Gtk.Image.new_from_icon_name("battery-good-symbolic", Gtk.IconSize.BUTTON)
+        bat_lbl = Gtk.Label(label=f"{cap}%  {stat}")
+        hdr.pack_start(bat_icon, False, False, 0)
+        hdr.pack_start(bat_lbl, False, False, 4)
+
+        def mk_circle(icon_name, cb):
+            b = Gtk.Button()
+            b.get_style_context().add_class("circle")
+            b.set_image(Gtk.Image.new_from_icon_name(icon_name, Gtk.IconSize.BUTTON))
+            b.connect("clicked", cb)
+            return b
+
+        hdr.pack_end(mk_circle("window-close-symbolic", lambda *_: self.quit()), False, False, 0)
+        self.pwr_btn = mk_circle("system-shutdown-symbolic", self.toggle_power_box)
+        hdr.pack_end(self.pwr_btn, False, False, 0)
+        hdr.pack_end(mk_circle("system-lock-screen-symbolic", lambda *_: self.launch_and_close(["/usr/local/bin/gta8-lockscreen"])), False, False, 0)
+        hdr.pack_end(mk_circle("emblem-system-symbolic", lambda *_: self.launch_and_close(["gnome-control-center"])), False, False, 0)
+        root.pack_start(hdr, False, False, 0)
+
+        self.power_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+        self.power_box.set_no_show_all(True)
+        for label, cmd, danger in (
+            ("Screen Off", ["/usr/local/bin/gta8-power-toggle", "off"], False),
+            ("Lock Screen", ["/usr/local/bin/gta8-lockscreen"], False),
+            ("Reboot to Android", ["/usr/local/bin/boot-android"], False),
+            ("Reboot Droidian", ["/usr/local/bin/reboot-droidian"], False),
+            ("Power Off", ["systemctl", "poweroff"], True),
+        ):
+            pb = Gtk.Button(label=label)
+            pb.get_style_context().add_class("power-opt")
+            if danger:
+                pb.get_style_context().add_class("danger")
+            pb.connect("clicked", lambda _, c=cmd: self.launch_and_close(c))
+            pb.show()
+            self.power_box.pack_start(pb, False, False, 0)
+        root.pack_start(self.power_box, False, False, 0)
+
+        bl_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
+        bl_row.pack_start(Gtk.Image.new_from_icon_name("display-brightness-symbolic", Gtk.IconSize.BUTTON), False, False, 0)
+        cur_bl = int(read_file("/sys/class/backlight/sprd_backlight/brightness", "90") or 90)
+        bl_adj = Gtk.Adjustment(value=cur_bl, lower=12, upper=255, step_increment=8, page_increment=24)
+        self.bl_scale = Gtk.Scale(orientation=Gtk.Orientation.HORIZONTAL, adjustment=bl_adj)
+        self.bl_scale.set_draw_value(False)
+        self.bl_scale.connect("value-changed", self.on_bl)
+        bl_row.pack_start(self.bl_scale, True, True, 0)
+        root.pack_start(bl_row, False, False, 0)
+
+        vol_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
+        vol_btn = mk_circle("audio-volume-high-symbolic", lambda *_: subprocess.run(["pactl", "set-sink-mute", "@DEFAULT_SINK@", "toggle"], check=False))
+        vol_row.pack_start(vol_btn, False, False, 0)
+        cur_vol = 65
+        vout = run_out(["pactl", "get-sink-volume", "@DEFAULT_SINK@"])
+        for tok in vout.split():
+            if tok.endswith("%") and tok[:-1].isdigit():
+                cur_vol = min(100, int(tok[:-1])); break
+        vol_adj = Gtk.Adjustment(value=cur_vol, lower=0, upper=100, step_increment=5, page_increment=10)
+        self.vol_scale = Gtk.Scale(orientation=Gtk.Orientation.HORIZONTAL, adjustment=vol_adj)
+        self.vol_scale.set_draw_value(False)
+        self.vol_scale.connect("value-changed", self.on_vol)
+        vol_row.pack_start(self.vol_scale, True, True, 0)
+        root.pack_start(vol_row, False, False, 0)
+
+        grid = Gtk.Grid(column_spacing=10, row_spacing=10)
+        grid.set_column_homogeneous(True)
+        root.pack_start(grid, False, False, 0)
+
+        wifi_on = run_out(["nmcli", "radio", "wifi"]) == "enabled"
+        ssid = run_out(["nmcli", "-t", "-f", "ACTIVE,SSID", "dev", "wifi"])
+        active_ssid = next((l.split(":", 1)[1] for l in ssid.splitlines() if l.startswith("yes:")), "Wi-Fi")
+        self.wifi_btn = self.mk_tile("network-wireless-symbolic", active_ssid if wifi_on else "Wi-Fi Off", wifi_on, self.on_wifi_toggle)
+        grid.attach(self.wifi_btn, 0, 0, 1, 1)
+
+        bt_on = "Powered: yes" in run_out(["bluetoothctl", "show"])
+        self.bt_btn = self.mk_tile("bluetooth-active-symbolic", "Bluetooth" if bt_on else "BT Off", bt_on, self.on_bt_toggle)
+        grid.attach(self.bt_btn, 1, 0, 1, 1)
+
+        try:
+            cd = json.loads(run_out(["/usr/local/bin/gta8-cellular-status"]) or "{}")
+            c_txt = cd.get("text", "Cellular").replace("📵 ", "").replace("📶 ", "").replace("📡 ", "")
+            c_on = cd.get("class") == "connected"
+        except Exception:
+            c_txt, c_on = "Cellular", False
+        grid.attach(self.mk_tile("network-cellular-signal-excellent-symbolic", c_txt, c_on, lambda *_: self.launch_and_close(["gnome-control-center", "wwan"])), 0, 1, 1, 1)
+
+        try:
+            rd = json.loads(run_out(["/usr/local/bin/gta8-wayfire-ipc", "rotate-status"]) or "{}")
+            r_txt = rd.get("text", "Auto-Rotate")
+            r_auto = rd.get("class") == "auto"
+        except Exception:
+            r_txt, r_auto = "Auto-Rotate", True
+        self.rot_btn, self.rot_lbl = self.mk_tile_with_lbl("object-rotate-right-symbolic", r_txt, r_auto, self.on_rot_cycle)
+        grid.attach(self.rot_btn, 1, 1, 1, 1)
+
+        grid.attach(self.mk_tile("input-keyboard-symbolic", "Keyboard", False, self.on_osk), 0, 2, 1, 1)
+        grid.attach(self.mk_tile("view-app-grid-symbolic", "Toggle Dock", True, self.on_dock), 1, 2, 1, 1)
+
+        self.connect("key-press-event", lambda _, e: self.quit() if e.keyval == Gdk.KEY_Escape else False)
+        self.show_all()
+
+    def mk_tile_with_lbl(self, icon_name, label, active, cb):
+        b = Gtk.Button()
+        b.get_style_context().add_class("tile")
+        if active:
+            b.get_style_context().add_class("active")
+        box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        box.pack_start(Gtk.Image.new_from_icon_name(icon_name, Gtk.IconSize.BUTTON), False, False, 0)
+        lbl = Gtk.Label(label=label)
+        lbl.set_ellipsize(3)
+        box.pack_start(lbl, True, True, 0)
+        b.add(box)
+        b.connect("clicked", cb)
+        return b, lbl
+
+    def mk_tile(self, icon_name, label, active, cb):
+        return self.mk_tile_with_lbl(icon_name, label, active, cb)[0]
+
+    def toggle_power_box(self, *_):
+        self.power_box.set_visible(not self.power_box.get_visible())
+
+    def on_bl(self, scale):
+        val = int(scale.get_value())
+        try:
+            with open("/sys/class/backlight/sprd_backlight/brightness", "w") as f:
+                f.write(str(val))
+        except Exception:
+            pass
+
+    def on_vol(self, scale):
+        val = int(scale.get_value())
+        subprocess.run(["pactl", "set-sink-volume", "@DEFAULT_SINK@", f"{val}%"], check=False)
+
+    def on_wifi_toggle(self, btn):
+        ctx = btn.get_style_context()
+        new_on = not ctx.has_class("active")
+        subprocess.run(["nmcli", "radio", "wifi", "on" if new_on else "off"], check=False)
+        if new_on: ctx.add_class("active")
+        else: ctx.remove_class("active")
+
+    def on_bt_toggle(self, btn):
+        ctx = btn.get_style_context()
+        new_on = not ctx.has_class("active")
+        subprocess.run(["bluetoothctl", "power", "on" if new_on else "off"], check=False)
+        if new_on: ctx.add_class("active")
+        else: ctx.remove_class("active")
+
+    def on_rot_cycle(self, btn):
+        subprocess.run(["/usr/local/bin/gta8-wayfire-ipc", "rotate-cycle"], check=False)
+        try:
+            rd = json.loads(run_out(["/usr/local/bin/gta8-wayfire-ipc", "rotate-status"]) or "{}")
+            self.rot_lbl.set_text(rd.get("text", "Auto-Rotate"))
+            if rd.get("class") == "auto": btn.get_style_context().add_class("active")
+            else: btn.get_style_context().remove_class("active")
+        except Exception:
+            pass
+
+    def on_osk(self, *_):
+        subprocess.Popen(["/usr/local/bin/gta8-keyboard", "toggle"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+        self.quit()
+
+    def on_dock(self, *_):
+        subprocess.run(["pkill", "-USR1", "-f", "/usr/local/bin/gta8-dock"], check=False)
+
+    def launch_and_close(self, cmd):
+        subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+        self.quit()
+
+    def quit(self):
+        try: os.remove(PIDFILE)
+        except Exception: pass
+        Gtk.main_quit()
+
+def on_sig(*_):
+    try: os.remove(PIDFILE)
+    except Exception: pass
+    sys.exit(0)
+
+signal.signal(signal.SIGTERM, on_sig)
+signal.signal(signal.SIGINT, on_sig)
+QuickSettings()
+Gtk.main()
