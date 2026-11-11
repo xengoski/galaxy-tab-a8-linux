@@ -1,0 +1,262 @@
+#!/usr/bin/env python3
+import json, os, signal, socket, sys
+import gi
+gi.require_version("Gdk", "3.0")
+gi.require_version("Gtk", "3.0")
+gi.require_version("GtkLayerShell", "0.1")
+from gi.repository import Gdk, GLib, Gtk, GtkLayerShell
+
+PIDFILE = f"/run/user/{os.getuid()}/gta8-keyboard.pid"
+SOCK_PATH = "/run/gta8-vkbd.sock"
+
+# CLI control mode: toggle | show | hide | daemon
+cmd = sys.argv[1] if len(sys.argv) > 1 else "toggle"
+if cmd in ("toggle", "show", "hide"):
+    if os.path.exists(PIDFILE):
+        try:
+            pid = int(open(PIDFILE).read().strip())
+            sig = signal.SIGUSR1 if cmd == "toggle" else (signal.SIGUSR2 if cmd == "show" else signal.SIGHUP)
+            os.kill(pid, sig)
+            sys.exit(0)
+        except Exception:
+            pass
+    if cmd == "hide":
+        sys.exit(0)
+
+# Keycodes from linux/input-event-codes.h
+K = {
+    "ESC": 1, "1": 2, "2": 3, "3": 4, "4": 5, "5": 6, "6": 7, "7": 8, "8": 9, "9": 10, "0": 11,
+    "-": 12, "=": 13, "BS": 14, "TAB": 15,
+    "q": 16, "w": 17, "e": 18, "r": 19, "t": 20, "y": 21, "u": 22, "i": 23, "o": 24, "p": 25,
+    "[": 26, "]": 27, "ENTER": 28, "CTRL": 29,
+    "a": 30, "s": 31, "d": 32, "f": 33, "g": 34, "h": 35, "j": 36, "k": 37, "l": 38,
+    ";": 39, "'": 40, "`": 41, "LSHIFT": 42, "\\": 43,
+    "z": 44, "x": 45, "c": 46, "v": 47, "b": 48, "n": 49, "m": 50,
+    ",": 51, ".": 52, "/": 53, "ALT": 56, " ": 57,
+    "UP": 103, "LEFT": 105, "RIGHT": 106, "DOWN": 108, "DEL": 111, "SUPER": 125,
+}
+SHIFT_CHARS = {
+    "!": K["1"], "@": K["2"], "#": K["3"], "$": K["4"], "%": K["5"],
+    "^": K["6"], "&": K["7"], "*": K["8"], "(": K["9"], ")": K["0"],
+    "_": K["-"], "+": K["="], "{": K["["], "}": K["]"], ":": K[";"],
+    "\"": K["'"], "~": K["`"], "|": K["\\"], "<": K[","], ">": K["."], "?": K["/"],
+}
+
+CSS = b"""
+window {
+    background-color: rgba(20, 22, 28, 0.68);
+    border-top: 1px solid rgba(255, 255, 255, 0.18);
+    font-family: Cantarell, sans-serif;
+}
+button.key {
+    background-color: rgba(255, 255, 255, 0.11);
+    color: #ffffff;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 10px;
+    font-size: 16px;
+    font-weight: 600;
+    min-height: 44px;
+    min-width: 28px;
+}
+button.key:active {
+    background-color: #3584e4;
+}
+button.key.mod {
+    background-color: rgba(255, 255, 255, 0.20);
+    font-size: 14px;
+}
+button.key.mod-on {
+    background-color: #3584e4;
+    color: #ffffff;
+}
+button.key.fn {
+    background-color: rgba(255, 255, 255, 0.15);
+    font-size: 13px;
+    min-height: 36px;
+}
+button.key.enter {
+    background-color: #3584e4;
+}
+"""
+
+ROWS_LOWER = [
+    ["1","2","3","4","5","6","7","8","9","0"],
+    ["q","w","e","r","t","y","u","i","o","p"],
+    ["a","s","d","f","g","h","j","k","l"],
+    ["SHIFT","z","x","c","v","b","n","m","BS"],
+    ["SYM", ",", " ", ".", "ENTER"],
+]
+ROWS_UPPER = [
+    ["1","2","3","4","5","6","7","8","9","0"],
+    ["Q","W","E","R","T","Y","U","I","O","P"],
+    ["A","S","D","F","G","H","J","K","L"],
+    ["SHIFT","Z","X","C","V","B","N","M","BS"],
+    ["SYM", ",", " ", ".", "ENTER"],
+]
+ROWS_SYM = [
+    ["!","@","#","$","%","^","&","*","(",")"],
+    ["-","_","=","+","[","]","{","}","|","\\"],
+    [";",":","'","\"","`","~","<",">","/","?"],
+    ["ABC",",",".","DEL","BS"],
+    ["ABC", " ", "ENTER"],
+]
+
+def send_keys(codes):
+    try:
+        s = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)
+        s.sendto(json.dumps({"keys": codes}).encode(), SOCK_PATH)
+        s.close()
+    except Exception:
+        pass
+
+class UniversalKeyboard(Gtk.Window):
+    def __init__(self, start_hidden=False):
+        super().__init__()
+        GtkLayerShell.init_for_window(self)
+        GtkLayerShell.set_layer(self, GtkLayerShell.Layer.OVERLAY)
+        GtkLayerShell.set_namespace(self, "gta8-keyboard")
+        for edge in (GtkLayerShell.Edge.BOTTOM, GtkLayerShell.Edge.LEFT, GtkLayerShell.Edge.RIGHT):
+            GtkLayerShell.set_anchor(self, edge, True)
+        # Never steal keyboard focus from target app!
+        GtkLayerShell.set_keyboard_mode(self, GtkLayerShell.KeyboardMode.NONE)
+
+        prov = Gtk.CssProvider()
+        prov.load_from_data(CSS)
+        Gtk.StyleContext.add_provider_for_screen(Gdk.Screen.get_default(), prov, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
+
+        self.mode = "lower"
+        self.mods = {"CTRL": False, "ALT": False, "SUPER": False, "SHIFT": False}
+        self.root = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=5)
+        self.root.set_margin_top(6); self.root.set_margin_bottom(8)
+        self.root.set_margin_start(8); self.root.set_margin_end(8)
+        self.add(self.root)
+
+        self.fn_bar = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=5)
+        self.fn_bar.set_homogeneous(True)
+        self.root.pack_start(self.fn_bar, False, False, 0)
+
+        self.grid_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=5)
+        self.root.pack_start(self.grid_box, False, False, 0)
+
+        self.render_all()
+        self.visible_state = not start_hidden
+        if start_hidden:
+            GtkLayerShell.set_exclusive_zone(self, 0)
+            self.hide()
+        else:
+            self.show_kbd()
+
+    def show_kbd(self):
+        self.visible_state = True
+        self.show_all()
+        GtkLayerShell.set_exclusive_zone(self, 355)
+
+    def hide_kbd(self):
+        self.visible_state = False
+        GtkLayerShell.set_exclusive_zone(self, 0)
+        self.hide()
+
+    def toggle_kbd(self):
+        if self.visible_state:
+            self.hide_kbd()
+        else:
+            self.show_kbd()
+
+    def render_all(self):
+        for ch in list(self.fn_bar.get_children()):
+            self.fn_bar.remove(ch)
+        for lbl, key in (
+            ("Esc", "ESC"), ("Tab", "TAB"), ("Ctrl", "CTRL"), ("Alt", "ALT"),
+            ("Super", "SUPER"), ("←", "LEFT"), ("↓", "DOWN"), ("↑", "UP"), ("→", "RIGHT"), ("▼ Hide", "HIDE")
+        ):
+            b = Gtk.Button(label=lbl)
+            b.get_style_context().add_class("key")
+            b.get_style_context().add_class("fn")
+            if key in self.mods and self.mods[key]:
+                b.get_style_context().add_class("mod-on")
+            b.connect("clicked", self.on_press, key)
+            self.fn_bar.pack_start(b, True, True, 0)
+
+        for ch in list(self.grid_box.get_children()):
+            self.grid_box.remove(ch)
+        rows = ROWS_LOWER if self.mode == "lower" else (ROWS_UPPER if self.mode == "upper" else ROWS_SYM)
+        for row in rows:
+            hb = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=5)
+            hb.set_homogeneous(len(row) >= 8)
+            for key in row:
+                lbl = key
+                cls = "key"
+                if key == "SHIFT": lbl = "⇧"; cls = "key mod-on" if self.mods["SHIFT"] or self.mode == "upper" else "key mod"
+                elif key == "BS": lbl = "⌫"; cls = "key mod"
+                elif key == "DEL": lbl = "Del"; cls = "key mod"
+                elif key == "SYM": lbl = "?123"; cls = "key mod"
+                elif key == "ABC": lbl = "ABC"; cls = "key mod"
+                elif key == " ": lbl = "Space"
+                elif key == "ENTER": lbl = "↵"; cls = "key enter"
+                b = Gtk.Button(label=lbl)
+                for c in cls.split():
+                    b.get_style_context().add_class(c)
+                b.connect("clicked", self.on_press, key)
+                hb.pack_start(b, key == " " or len(row) >= 8, True, 0)
+            self.grid_box.pack_start(hb, False, False, 0)
+        if self.get_visible():
+            self.show_all()
+
+    def on_press(self, _, key):
+        if key == "HIDE":
+            self.hide_kbd()
+            return
+        if key == "SHIFT":
+            self.mods["SHIFT"] = not self.mods["SHIFT"]
+            self.mode = "upper" if self.mods["SHIFT"] else "lower"
+            self.render_all()
+            return
+        if key == "SYM":
+            self.mode = "sym"; self.render_all(); return
+        if key == "ABC":
+            self.mode = "lower"; self.mods["SHIFT"] = False; self.render_all(); return
+        if key in ("CTRL", "ALT", "SUPER"):
+            self.mods[key] = not self.mods[key]
+            self.render_all()
+            return
+
+        seq = []
+        if self.mods["CTRL"]: seq.append(K["CTRL"])
+        if self.mods["ALT"]: seq.append(K["ALT"])
+        if self.mods["SUPER"]: seq.append(K["SUPER"])
+
+        if key in SHIFT_CHARS:
+            seq.append(K["LSHIFT"])
+            seq.append(SHIFT_CHARS[key])
+        elif len(key) == 1 and key.isupper():
+            seq.append(K["LSHIFT"])
+            seq.append(K[key.lower()])
+        elif key in K:
+            if self.mods["SHIFT"]:
+                seq.append(K["LSHIFT"])
+            seq.append(K[key])
+
+        if seq:
+            send_keys(seq)
+
+        # Auto-unlatch sticky modifiers after keypress
+        changed = any(self.mods.values())
+        if changed:
+            for m in self.mods:
+                self.mods[m] = False
+            if self.mode == "upper":
+                self.mode = "lower"
+            self.render_all()
+
+with open(PIDFILE, "w") as f:
+    f.write(str(os.getpid()))
+
+kbd = UniversalKeyboard(start_hidden=(cmd == "daemon"))
+if cmd == "show":
+    kbd.show_kbd()
+
+signal.signal(signal.SIGUSR1, lambda *_: GLib.idle_add(kbd.toggle_kbd))
+signal.signal(signal.SIGUSR2, lambda *_: GLib.idle_add(kbd.show_kbd))
+signal.signal(signal.SIGHUP, lambda *_: GLib.idle_add(kbd.hide_kbd))
+signal.signal(signal.SIGTERM, lambda *_: (os.path.exists(PIDFILE) and os.remove(PIDFILE), sys.exit(0)))
+Gtk.main()

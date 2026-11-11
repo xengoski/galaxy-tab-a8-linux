@@ -1,0 +1,37 @@
+#!/bin/sh
+BL=/sys/class/backlight/sprd_backlight/brightness
+SAVE="/run/user/$(id -u)/gta8-saved-brightness"
+MODE="${1:-toggle}"
+
+STATE=$(wlopm 2>/dev/null | awk "/HWCOMPOSER-1/{print \$2}")
+
+turn_on() {
+    wlopm --on "*" >/dev/null 2>&1 || true
+    if [ -w "$BL" ]; then
+        SAVED=$(cat "$SAVE" 2>/dev/null || echo 90)
+        case "$SAVED" in ""|*[!0-9]*|0) SAVED=90 ;; esac
+        [ "$SAVED" -lt 20 ] && SAVED=90
+        echo "$SAVED" > "$BL" 2>/dev/null || true
+    fi
+}
+
+turn_off() {
+    if [ -r "$BL" ]; then
+        CUR=$(cat "$BL" 2>/dev/null || echo 90)
+        [ -n "$CUR" ] && [ "$CUR" -gt 0 ] 2>/dev/null && echo "$CUR" > "$SAVE"
+        [ -w "$BL" ] && echo 0 > "$BL" 2>/dev/null || true
+    fi
+    wlopm --off "*" >/dev/null 2>&1 || true
+}
+
+case "$MODE" in
+    on|--on) turn_on ;;
+    off|--off) turn_off ;;
+    *)
+        if [ "$STATE" = "off" ]; then
+            turn_on
+        else
+            turn_off
+        fi
+        ;;
+esac

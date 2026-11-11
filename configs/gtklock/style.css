@@ -1,0 +1,12 @@
+window {
+    background-color: #131317;
+    color: #ffffff;
+    font-family: Cantarell, sans-serif;
+}
+entry {
+    background-color: rgba(255, 255, 255, 0.12);
+    color: #ffffff;
+    border-radius: 16px;
+    padding: 10px 16px;
+    font-size: 18px;
+}

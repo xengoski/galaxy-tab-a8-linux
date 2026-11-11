@@ -1,0 +1,299 @@
+#!/usr/bin/env python3
+import datetime, os, pwd, signal, subprocess, sys
+import gi
+gi.require_version("Gdk", "3.0")
+gi.require_version("Gtk", "3.0")
+gi.require_version("GtkSessionLock", "0.1")
+from gi.repository import Gdk, GLib, Gtk, GtkSessionLock
+
+PIDFILE = f"/run/user/{os.getuid()}/gta8-lockscreen.pid"
+if os.path.exists(PIDFILE):
+    try:
+        old = int(open(PIDFILE).read().strip())
+        os.kill(old, 0)
+        sys.exit(0)
+    except Exception:
+        pass
+with open(PIDFILE, "w") as f:
+    f.write(str(os.getpid()))
+
+USER = pwd.getpwuid(os.getuid()).pw_name
+
+CSS = b"""
+window {
+    background-color: #0e0e12;
+    background-image: linear-gradient(to bottom, rgba(16,18,26,0.92), rgba(10,10,14,0.98));
+    color: #ffffff;
+    font-family: Cantarell, sans-serif;
+}
+label.clock {
+    font-size: 64px;
+    font-weight: 300;
+    color: #ffffff;
+}
+label.date {
+    font-size: 18px;
+    font-weight: 500;
+    color: rgba(255, 255, 255, 0.78);
+}
+label.user {
+    font-size: 16px;
+    font-weight: 600;
+    color: #deddda;
+}
+label.err {
+    font-size: 14px;
+    font-weight: 600;
+    color: #ff7b63;
+}
+entry.pw {
+    background-color: rgba(255, 255, 255, 0.14);
+    color: #ffffff;
+    border: 1px solid rgba(255, 255, 255, 0.28);
+    border-radius: 16px;
+    padding: 10px 16px;
+    font-size: 18px;
+    min-height: 44px;
+    min-width: 280px;
+}
+button.act {
+    background-color: rgba(255, 255, 255, 0.12);
+    color: #ffffff;
+    border: none;
+    border-radius: 14px;
+    padding: 8px 14px;
+    font-weight: 600;
+}
+button.act.primary {
+    background-color: #3584e4;
+}
+button.key {
+    background-color: rgba(255, 255, 255, 0.11);
+    color: #ffffff;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 10px;
+    font-size: 17px;
+    font-weight: 600;
+    min-height: 48px;
+    min-width: 34px;
+}
+button.key:active {
+    background-color: #3584e4;
+}
+button.key.mod {
+    background-color: rgba(255, 255, 255, 0.20);
+}
+button.key.enter {
+    background-color: #3584e4;
+}
+"""
+
+ROWS_LOWER = [
+    list("1234567890"),
+    list("qwertyuiop"),
+    list("asdfghjkl"),
+    ["SHIFT", "z", "x", "c", "v", "b", "n", "m", "BS"],
+    ["SYM", " ", "ENTER"],
+]
+ROWS_UPPER = [
+    list("1234567890"),
+    list("QWERTYUIOP"),
+    list("ASDFGHJKL"),
+    ["SHIFT", "Z", "X", "C", "V", "B", "N", "M", "BS"],
+    ["SYM", " ", "ENTER"],
+]
+ROWS_SYM = [
+    list("!@#$%^&*()"),
+    list("-_=+[]{}|"),
+    list(";:\",.<>/?"),
+    ["~", "`", "\\", "'", "_", "@", "#", "BS"],
+    ["ABC", " ", "ENTER"],
+]
+
+class LockApp:
+    def __init__(self):
+        self.lock = GtkSessionLock.prepare_lock()
+        self.lock.connect("finished", lambda *_: self.cleanup_exit())
+
+        prov = Gtk.CssProvider()
+        prov.load_from_data(CSS)
+        Gtk.StyleContext.add_provider_for_screen(Gdk.Screen.get_default(), prov, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
+
+        self.mode = "lower"
+        self.entry = None
+        self.err_lbl = None
+        self.kb_box = None
+        self.windows = []
+
+        self.lock.lock_lock()
+        display = Gdk.Display.get_default()
+        nmon = display.get_n_monitors()
+        for i in range(nmon):
+            mon = display.get_monitor(i)
+            win = self.build_window(primary=(i == 0))
+            self.lock.new_surface(win, mon)
+            win.show_all()
+            self.windows.append(win)
+        GLib.timeout_add_seconds(5, self.update_clock)
+        if '--self-test' in sys.argv:
+            GLib.timeout_add(1500, self.self_unlock)
+
+    def build_window(self, primary=True):
+        win = Gtk.Window()
+        root = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
+        root.set_margin_top(40); root.set_margin_bottom(18)
+        root.set_margin_start(14); root.set_margin_end(14)
+        win.add(root)
+        if not primary:
+            return win
+
+        self.clock_lbl = Gtk.Label()
+        self.clock_lbl.get_style_context().add_class("clock")
+        self.date_lbl = Gtk.Label()
+        self.date_lbl.get_style_context().add_class("date")
+        self.update_clock()
+
+        top = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+        top.set_valign(Gtk.Align.CENTER)
+        top.pack_start(self.clock_lbl, False, False, 0)
+        top.pack_start(self.date_lbl, False, False, 0)
+        root.pack_start(top, True, True, 0)
+
+        auth_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
+        auth_box.set_halign(Gtk.Align.CENTER)
+
+        ulbl = Gtk.Label(label=USER)
+        ulbl.get_style_context().add_class("user")
+        auth_box.pack_start(ulbl, False, False, 0)
+
+        erow = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        self.entry = Gtk.Entry()
+        self.entry.set_visibility(False)
+        self.entry.set_can_focus(True)
+        self.entry.set_placeholder_text("Enter password or PIN")
+        self.entry.get_style_context().add_class("pw")
+        self.entry.connect("activate", lambda *_: self.try_unlock())
+        erow.pack_start(self.entry, True, True, 0)
+
+        eye = Gtk.Button()
+        eye.get_style_context().add_class("act")
+        eye.set_image(Gtk.Image.new_from_icon_name("view-reveal-symbolic", Gtk.IconSize.BUTTON))
+        eye.connect("clicked", lambda *_: self.entry.set_visibility(not self.entry.get_visibility()))
+        erow.pack_start(eye, False, False, 0)
+        auth_box.pack_start(erow, False, False, 0)
+
+        self.err_lbl = Gtk.Label(label="")
+        self.err_lbl.get_style_context().add_class("err")
+        auth_box.pack_start(self.err_lbl, False, False, 0)
+
+        arow = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        arow.set_halign(Gtk.Align.CENTER)
+        for txt, cls, cb in (
+            ("⌨ Keyboard", "act", self.toggle_kb),
+            ("Clear", "act", lambda *_: self.entry.set_text("")),
+            ("Screen Off", "act", lambda *_: subprocess.Popen(["/usr/local/bin/gta8-power-toggle", "off"])),
+            ("Unlock", "act primary", lambda *_: self.try_unlock()),
+        ):
+            b = Gtk.Button(label=txt)
+            for c in cls.split():
+                b.get_style_context().add_class(c)
+            b.connect("clicked", cb)
+            arow.pack_start(b, False, False, 0)
+        auth_box.pack_start(arow, False, False, 0)
+        root.pack_start(auth_box, False, False, 10)
+
+        self.kb_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+        self.kb_box.set_valign(Gtk.Align.END)
+        self.render_kb()
+        root.pack_end(self.kb_box, False, False, 4)
+
+        GLib.idle_add(lambda: self.entry.grab_focus())
+        return win
+
+    def render_kb(self):
+        for ch in list(self.kb_box.get_children()):
+            self.kb_box.remove(ch)
+        rows = ROWS_LOWER if self.mode == "lower" else (ROWS_UPPER if self.mode == "upper" else ROWS_SYM)
+        for row in rows:
+            hb = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=5)
+            hb.set_homogeneous(len(row) >= 8)
+            for key in row:
+                lbl = key
+                cls = "key"
+                expand = True
+                if key == "SHIFT": lbl = "⇧"; cls = "key mod"
+                elif key == "BS": lbl = "⌫"; cls = "key mod"
+                elif key == "SYM": lbl = "?123"; cls = "key mod"
+                elif key == "ABC": lbl = "ABC"; cls = "key mod"
+                elif key == " ": lbl = "Space"
+                elif key == "ENTER": lbl = "↵ Unlock"; cls = "key enter"
+                btn = Gtk.Button(label=lbl)
+                for c in cls.split():
+                    btn.get_style_context().add_class(c)
+                btn.connect("clicked", self.on_key, key)
+                hb.pack_start(btn, expand, True, 0)
+            self.kb_box.pack_start(hb, False, False, 0)
+        self.kb_box.show_all()
+
+    def on_key(self, _, key):
+        if key == "SHIFT":
+            self.mode = "upper" if self.mode == "lower" else "lower"
+            self.render_kb()
+        elif key == "SYM":
+            self.mode = "sym"
+            self.render_kb()
+        elif key == "ABC":
+            self.mode = "lower"
+            self.render_kb()
+        elif key == "BS":
+            txt = self.entry.get_text()
+            if txt:
+                self.entry.set_text(txt[:-1])
+                self.entry.set_position(-1)
+        elif key == "ENTER":
+            self.try_unlock()
+        else:
+            self.entry.set_text(self.entry.get_text() + key)
+            self.entry.set_position(-1)
+            if self.mode == "upper":
+                self.mode = "lower"
+                self.render_kb()
+
+    def toggle_kb(self, *_):
+        self.kb_box.set_visible(not self.kb_box.get_visible())
+
+    def update_clock(self):
+        now = datetime.datetime.now()
+        self.clock_lbl.set_text(now.strftime("%H:%M"))
+        self.date_lbl.set_text(now.strftime("%A, %B %d"))
+        return True
+
+    def try_unlock(self):
+        pw = self.entry.get_text()
+        p = subprocess.run(["/sbin/unix_chkpwd", USER, "nullok"], input=pw.encode("utf-8") + b"\x00", capture_output=True)
+        if p.returncode == 0:
+            self.lock.unlock_and_destroy()
+            Gdk.Display.get_default().sync()
+            self.cleanup_exit()
+        else:
+            self.entry.set_text("")
+            self.err_lbl.set_text("Incorrect password — please try again")
+
+    def self_unlock(self):
+        self.on_key(None, 'a')
+        assert self.entry.get_text() == 'a'
+        self.on_key(None, 'BS')
+        assert self.entry.get_text() == ''
+        self.lock.unlock_and_destroy()
+        Gdk.Display.get_default().sync()
+        self.cleanup_exit()
+        return False
+
+    def cleanup_exit(self):
+        try: os.remove(PIDFILE)
+        except Exception: pass
+        Gtk.main_quit()
+
+app = LockApp()
+signal.signal(signal.SIGTERM, lambda *_: None)
+Gtk.main()
