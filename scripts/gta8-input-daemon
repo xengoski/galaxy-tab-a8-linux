@@ -1,0 +1,515 @@
+#!/usr/bin/env python3
+import evdev
+from evdev import ecodes as e, InputDevice, UInput, AbsInfo
+import json, math, os, select, signal, socket, subprocess, sys, time
+
+SOCK_PATH = "/run/gta8-vkbd.sock"
+WF_SOCK = "/run/user/32011/wayfire-wayland-0-.socket"
+
+def find_touch_device():
+    for p in evdev.list_devices():
+        d = InputDevice(p)
+        if "himax-touchscreen" in d.name.lower():
+            return d
+        d.close()
+    return None
+
+def make_vkbd():
+    keys = [
+        e.KEY_ESC, e.KEY_1, e.KEY_2, e.KEY_3, e.KEY_4, e.KEY_5, e.KEY_6, e.KEY_7, e.KEY_8, e.KEY_9, e.KEY_0,
+        e.KEY_MINUS, e.KEY_EQUAL, e.KEY_BACKSPACE, e.KEY_TAB,
+        e.KEY_Q, e.KEY_W, e.KEY_E, e.KEY_R, e.KEY_T, e.KEY_Y, e.KEY_U, e.KEY_I, e.KEY_O, e.KEY_P,
+        e.KEY_LEFTBRACE, e.KEY_RIGHTBRACE, e.KEY_ENTER, e.KEY_LEFTCTRL,
+        e.KEY_A, e.KEY_S, e.KEY_D, e.KEY_F, e.KEY_G, e.KEY_H, e.KEY_J, e.KEY_K, e.KEY_L,
+        e.KEY_SEMICOLON, e.KEY_APOSTROPHE, e.KEY_GRAVE, e.KEY_LEFTSHIFT, e.KEY_BACKSLASH,
+        e.KEY_Z, e.KEY_X, e.KEY_C, e.KEY_V, e.KEY_B, e.KEY_N, e.KEY_M,
+        e.KEY_COMMA, e.KEY_DOT, e.KEY_SLASH, e.KEY_RIGHTSHIFT, e.KEY_LEFTALT, e.KEY_SPACE,
+        e.KEY_CAPSLOCK, e.KEY_F1, e.KEY_F2, e.KEY_F3, e.KEY_F4, e.KEY_F5, e.KEY_F6, e.KEY_F7, e.KEY_F8, e.KEY_F9, e.KEY_F10, e.KEY_F11, e.KEY_F12,
+        e.KEY_HOME, e.KEY_UP, e.KEY_PAGEUP, e.KEY_LEFT, e.KEY_RIGHT, e.KEY_END, e.KEY_DOWN, e.KEY_PAGEDOWN, e.KEY_DELETE,
+        e.KEY_LEFTMETA,
+    ]
+    return UInput({e.EV_KEY: keys}, name="gta8-vkbd")
+
+def make_mouse():
+    return UInput({
+        e.EV_KEY: [e.BTN_LEFT, e.BTN_RIGHT, e.BTN_MIDDLE],
+        e.EV_REL: [e.REL_X, e.REL_Y, e.REL_WHEEL, e.REL_HWHEEL, e.REL_WHEEL_HI_RES, e.REL_HWHEEL_HI_RES],
+    }, name="gta8-mouse")
+
+def make_touch(src):
+    abs_caps = src.capabilities(absinfo=True).get(e.EV_ABS, [])
+    cap = {
+        e.EV_KEY: [e.BTN_TOUCH],
+        e.EV_ABS: abs_caps + [
+            (e.ABS_X, AbsInfo(0, 0, 1199, 0, 0, 0)),
+            (e.ABS_Y, AbsInfo(0, 0, 1919, 0, 0, 0)),
+        ],
+    }
+    return UInput(cap, name="gta8-touch", input_props=[e.INPUT_PROP_DIRECT])
+
+def wf_call(method, data=None):
+    try:
+        s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        s.settimeout(0.3)
+        s.connect(WF_SOCK)
+        msg = json.dumps({"method": method, **({"data": data} if data is not None else {})}).encode()
+        s.sendall(len(msg).to_bytes(4, "little") + msg)
+        hdr = s.recv(4)
+        if len(hdr) < 4:
+            s.close(); return {}
+        ln = int.from_bytes(hdr, "little")
+        buf = b""
+        while len(buf) < ln:
+            c = s.recv(ln - len(buf))
+            if not c: break
+            buf += c
+        s.close()
+        return json.loads(buf.decode())
+    except Exception:
+        return {}
+
+class OutputState:
+    def __init__(self):
+        self.tf = "normal"
+        self.w = 800
+        self.h = 1280
+        self.last = 0.0
+
+    def update(self):
+        now = time.monotonic()
+        if now - self.last < 0.8:
+            return
+        self.last = now
+        r = wf_call("wayfire/get-config-option", {"option": "output:HWCOMPOSER-1/transform"})
+        if "value" in r:
+            self.tf = str(r["value"])
+        outs = wf_call("window-rules/list-outputs")
+        if isinstance(outs, list) and outs:
+            g = outs[0].get("geometry", {})
+            self.w = int(g.get("width", 800))
+            self.h = int(g.get("height", 1280))
+
+    def raw_to_logical(self, rx, ry):
+        self.update()
+        nx = max(0.0, min(1.0, rx / 1199.0))
+        ny = max(0.0, min(1.0, ry / 1919.0))
+        if self.tf == "90":
+            return int(ny * self.w), int((1.0 - nx) * self.h)
+        elif self.tf == "270":
+            return int((1.0 - ny) * self.w), int(nx * self.h)
+        elif self.tf == "180":
+            return int((1.0 - nx) * self.w), int((1.0 - ny) * self.h)
+        return int(nx * self.w), int(ny * self.h)
+
+    def raw_delta_to_screen(self, dx, dy):
+        self.update()
+        if self.tf == "90":
+            return dy, -dx
+        elif self.tf == "270":
+            return -dy, dx
+        elif self.tf == "180":
+            return -dx, -dy
+        return dx, dy
+
+def send_vkbd_keys(vkbd, keys):
+    if not keys:
+        return
+    mods = keys[:-1]
+    main = keys[-1]
+    for m in mods:
+        vkbd.write(e.EV_KEY, m, 1)
+        vkbd.syn()
+    vkbd.write(e.EV_KEY, main, 1)
+    vkbd.syn()
+    time.sleep(0.01)
+    vkbd.write(e.EV_KEY, main, 0)
+    vkbd.syn()
+    for m in reversed(mods):
+        vkbd.write(e.EV_KEY, m, 0)
+        vkbd.syn()
+
+def run_user_cmd(cmd):
+    subprocess.Popen(
+        cmd,
+        env={
+            "HOME": "/home/droidian", "USER": "droidian",
+            "PATH": "/usr/local/bin:/usr/bin:/bin",
+            "XDG_RUNTIME_DIR": "/run/user/32011",
+            "WAYLAND_DISPLAY": "wayland-0",
+            "DBUS_SESSION_BUS_ADDRESS": "unix:path=/run/user/32011/bus",
+            "XDG_CURRENT_DESKTOP": "GNOME:Wayfire",
+        },
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        user=32011, group=32011, start_new_session=True,
+    )
+
+def main():
+    touch_src = None
+    for _ in range(30):
+        touch_src = find_touch_device()
+        if touch_src:
+            break
+        time.sleep(0.5)
+    if not touch_src:
+        print("himax-touchscreen not found", file=sys.stderr)
+        sys.exit(1)
+
+    vkbd = make_vkbd()
+    mouse = make_mouse()
+    touch_out = make_touch(touch_src)
+
+    if os.path.exists(SOCK_PATH):
+        os.remove(SOCK_PATH)
+    srv = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)
+    srv.bind(SOCK_PATH)
+    os.chmod(SOCK_PATH, 0o666)
+    srv.setblocking(False)
+
+    out_st = OutputState()
+    running = True
+    def stop_sig(*_):
+        nonlocal running
+        running = False
+    signal.signal(signal.SIGTERM, stop_sig)
+    signal.signal(signal.SIGINT, stop_sig)
+
+    touch_src.grab()
+    try:
+        # Multitouch tracking state
+        slots = {}          # slot_idx -> {"id": int, "x": int, "y": int}
+        active = {}         # slot_idx -> {"sx": int, "sy": int, "x": int, "y": int}
+        cur_slot = 0
+        frame_events = []
+
+        mode = "IDLE"       # IDLE, PENDING, PASSTHROUGH, GESTURE
+        pending_buf = []
+        pending_t0 = 0.0
+        pass_t0 = 0.0
+        pass_max_n = 0
+
+        # Gesture tracking
+        g_start_t = 0.0
+        g_max_fingers = 0
+        g_start_dist = 0.0
+        g_last_mx = 0.0
+        g_last_my = 0.0
+        g_wheel_acc_y = 0.0
+        g_wheel_acc_x = 0.0
+        g_rem_x = 0.0
+        g_rem_y = 0.0
+        g_scroll_started = False
+        g_swipe_fired = False
+        g_max_travel = 0.0
+
+        def flush_to_touch(ev_list):
+            for etype, ecode, eval_ in ev_list:
+                touch_out.write(etype, ecode, eval_)
+            touch_out.syn()
+
+        def cancel_touch():
+            for sl in range(10):
+                touch_out.write(e.EV_ABS, e.ABS_MT_SLOT, sl)
+                touch_out.write(e.EV_ABS, e.ABS_MT_TRACKING_ID, -1)
+            touch_out.write(e.EV_KEY, e.BTN_TOUCH, 0)
+            touch_out.syn()
+
+        def reset_gesture():
+            nonlocal mode, pending_buf, pass_t0, pass_max_n
+            nonlocal g_max_fingers, g_scroll_started, g_swipe_fired
+            nonlocal g_wheel_acc_x, g_wheel_acc_y, g_rem_x, g_rem_y, g_max_travel
+            mode = "IDLE"
+            pending_buf = []
+            pass_t0 = 0.0
+            pass_max_n = 0
+            g_max_fingers = 0
+            g_scroll_started = False
+            g_swipe_fired = False
+            g_wheel_acc_x = 0.0
+            g_wheel_acc_y = 0.0
+            g_rem_x = 0.0
+            g_rem_y = 0.0
+            g_max_travel = 0.0
+
+        def enter_passthrough(initial_buf=None):
+            nonlocal mode, pending_buf, pass_t0, pass_max_n
+            mode = "PASSTHROUGH"
+            pass_t0 = time.monotonic()
+            pass_max_n = max(1, len(active))
+            if initial_buf:
+                flush_to_touch(initial_buf)
+            pending_buf = []
+
+        def enter_gesture():
+            nonlocal mode, g_start_t, g_max_fingers, g_start_dist, g_last_mx, g_last_my
+            nonlocal g_wheel_acc_x, g_wheel_acc_y, g_rem_x, g_rem_y, g_scroll_started, g_swipe_fired, g_max_travel
+            mode = "GESTURE"
+            pending_buf.clear()
+            g_start_t = time.monotonic()
+            g_max_fingers = len(active)
+            g_scroll_started = False
+            g_swipe_fired = False
+            g_wheel_acc_x = 0.0
+            g_wheel_acc_y = 0.0
+            g_rem_x = 0.0
+            g_rem_y = 0.0
+            g_max_travel = 0.0
+            for d in active.values():
+                d["sx"], d["sy"] = d["x"], d["y"]
+            pts = list(active.values())
+            g_last_mx = sum(p["x"] for p in pts) / len(pts)
+            g_last_my = sum(p["y"] for p in pts) / len(pts)
+            if len(pts) >= 2:
+                g_start_dist = math.hypot(pts[0]["x"] - pts[1]["x"], pts[0]["y"] - pts[1]["y"])
+            else:
+                g_start_dist = 0.0
+
+        def handle_syn(frame_evs):
+            nonlocal mode, pending_buf, pending_t0, pass_max_n, g_max_fingers, g_start_dist, g_last_mx, g_last_my
+            nonlocal g_wheel_acc_x, g_wheel_acc_y, g_rem_x, g_rem_y, g_scroll_started, g_swipe_fired, g_max_travel
+
+            # Update active fingers snapshot
+            prev_n = len(active)
+            for k in list(active.keys()):
+                if k not in slots or slots[k].get("id", -1) < 0:
+                    del active[k]
+            for k, v in slots.items():
+                if v.get("id", -1) >= 0:
+                    if k not in active:
+                        active[k] = {"sx": v["x"], "sy": v["y"], "x": v["x"], "y": v["y"]}
+                    else:
+                        active[k]["x"], active[k]["y"] = v["x"], v["y"]
+            cur_n = len(active)
+
+            # Synthesize legacy ABS_X / ABS_Y for compatibility if needed
+            if mode == "IDLE":
+                if cur_n == 1:
+                    mode = "PENDING"
+                    pending_t0 = time.monotonic()
+                    pending_buf = list(frame_evs)
+                elif cur_n >= 2:
+                    enter_gesture()
+                return
+
+            if mode == "PENDING":
+                if cur_n == 0:
+                    # Fast 1-finger tap (<80ms)
+                    flush_to_touch(pending_buf)
+                    flush_to_touch(frame_evs)
+                    reset_gesture()
+                elif cur_n >= 2:
+                    # 2+ fingers landed within 80ms -> clean gesture mode without touching app!
+                    enter_gesture()
+                else:
+                    pending_buf.extend(frame_evs)
+                    p = next(iter(active.values()))
+                    if math.hypot(p["x"] - p["sx"], p["y"] - p["sy"]) > 18:
+                        enter_passthrough(pending_buf)
+                return
+
+            if mode == "PASSTHROUGH":
+                if cur_n > pass_max_n:
+                    pass_max_n = cur_n
+                # Promote staggered 2-finger landing cleanly into GESTURE if single touch just started
+                if cur_n >= 2 and pass_max_n <= 2 and (time.monotonic() - pass_t0) < 0.16:
+                    max_f0 = max((math.hypot(d["x"] - d["sx"], d["y"] - d["sy"]) for d in active.values()), default=0.0)
+                    if max_f0 < 45:
+                        cancel_touch()
+                        enter_gesture()
+                        return
+                flush_to_touch(frame_evs)
+                if cur_n == 0:
+                    reset_gesture()
+                return
+
+            if mode == "GESTURE":
+                if cur_n > g_max_fingers:
+                    g_max_fingers = cur_n
+                    for d in active.values():
+                        d["sx"], d["sy"] = d["x"], d["y"]
+                    pts = list(active.values())
+                    g_last_mx = sum(p["x"] for p in pts) / len(pts)
+                    g_last_my = sum(p["y"] for p in pts) / len(pts)
+                    if len(pts) >= 2:
+                        g_start_dist = math.hypot(pts[0]["x"] - pts[1]["x"], pts[0]["y"] - pts[1]["y"])
+
+                if cur_n > 0:
+                    pts = list(active.values())
+                    mx = sum(p["x"] for p in pts) / len(pts)
+                    my = sum(p["y"] for p in pts) / len(pts)
+                    for p in pts:
+                        tr = math.hypot(p["x"] - p["sx"], p["y"] - p["sy"])
+                        if tr > g_max_travel:
+                            g_max_travel = tr
+
+                    # 2-finger drag -> Scroll (strict opposing-pinch check so scroll never triggers zoom!)
+                    if g_max_fingers == 2 and cur_n == 2:
+                        dist = math.hypot(pts[0]["x"] - pts[1]["x"], pts[0]["y"] - pts[1]["y"])
+                        dx = mx - g_last_mx
+                        dy = my - g_last_my
+                        g_last_mx, g_last_my = mx, my
+
+                        cx = mx - (pts[0]["sx"] + pts[1]["sx"]) / 2.0
+                        cy = my - (pts[0]["sy"] + pts[1]["sy"]) / 2.0
+                        centroid_move = math.hypot(cx, cy)
+                        delta_dist = abs(dist - g_start_dist)
+                        v0x, v0y = pts[0]["x"] - pts[0]["sx"], pts[0]["y"] - pts[0]["sy"]
+                        v1x, v1y = pts[1]["x"] - pts[1]["sx"], pts[1]["y"] - pts[1]["sy"]
+                        dot = v0x * v1x + v0y * v1y
+
+                        if (
+                            not g_scroll_started
+                            and (time.monotonic() - g_start_t) > 0.05
+                            and dot < -250
+                            and delta_dist > 135
+                            and centroid_move < delta_dist * 0.45
+                        ):
+                            # Intentional opposing-finger pinch-to-zoom -> release to passthrough MT touches
+                            mode = "PASSTHROUGH"
+                            pass_max_n = 2
+                            for idx, p in enumerate(pts):
+                                touch_out.write(e.EV_ABS, e.ABS_MT_SLOT, idx)
+                                touch_out.write(e.EV_ABS, e.ABS_MT_TRACKING_ID, idx + 1)
+                                touch_out.write(e.EV_ABS, e.ABS_MT_POSITION_X, p["x"])
+                                touch_out.write(e.EV_ABS, e.ABS_MT_POSITION_Y, p["y"])
+                            touch_out.write(e.EV_KEY, e.BTN_TOUCH, 1)
+                            touch_out.syn()
+                            return
+
+                        if (
+                            g_scroll_started
+                            or (centroid_move > 18 and not (delta_dist > centroid_move * 1.4 and dot < 0))
+                            or g_max_travel > 28
+                        ) and (abs(dx) > 0.2 or abs(dy) > 0.2):
+                            if not g_scroll_started:
+                                g_scroll_started = True
+                                lx, ly = out_st.raw_to_logical(mx, my)
+                                wf_call("stipc/move_cursor", {"x": lx, "y": ly})
+                            sdx, sdy = out_st.raw_delta_to_screen(dx, dy)
+                            # Natural scroll: swipe down -> wheel up (+), swipe up -> wheel down (-)
+                            g_rem_y += sdy * 1.35
+                            g_rem_x += -sdx * 1.35
+                            hy = int(g_rem_y)
+                            hx = int(g_rem_x)
+                            g_rem_y -= hy
+                            g_rem_x -= hx
+                            if hy != 0:
+                                mouse.write(e.EV_REL, e.REL_WHEEL_HI_RES, hy)
+                                g_wheel_acc_y += hy
+                                while g_wheel_acc_y >= 120:
+                                    mouse.write(e.EV_REL, e.REL_WHEEL, 1); g_wheel_acc_y -= 120
+                                while g_wheel_acc_y <= -120:
+                                    mouse.write(e.EV_REL, e.REL_WHEEL, -1); g_wheel_acc_y += 120
+                            if hx != 0:
+                                mouse.write(e.EV_REL, e.REL_HWHEEL_HI_RES, hx)
+                                g_wheel_acc_x += hx
+                                while g_wheel_acc_x >= 120:
+                                    mouse.write(e.EV_REL, e.REL_HWHEEL, 1); g_wheel_acc_x -= 120
+                                while g_wheel_acc_x <= -120:
+                                    mouse.write(e.EV_REL, e.REL_HWHEEL, -1); g_wheel_acc_x += 120
+                            if hy != 0 or hx != 0:
+                                mouse.syn()
+
+                    # 3-finger swipe -> Workspaces / Overview / Keyboard
+                    elif g_max_fingers == 3 and cur_n == 3 and not g_swipe_fired:
+                        sx = sum(p["sx"] for p in pts) / len(pts)
+                        sy = sum(p["sy"] for p in pts) / len(pts)
+                        sdx, sdy = out_st.raw_delta_to_screen(mx - sx, my - sy)
+                        if abs(sdx) > 105 or abs(sdy) > 105:
+                            g_swipe_fired = True
+                            if abs(sdx) >= abs(sdy):
+                                # 3-finger swipe left -> next workspace right, right -> workspace left
+                                key = e.KEY_RIGHT if sdx < 0 else e.KEY_LEFT
+                                send_vkbd_keys(vkbd, [e.KEY_LEFTMETA, e.KEY_LEFTALT, key])
+                            else:
+                                if sdy < 0:
+                                    wf_call("scale/toggle")
+                                else:
+                                    run_user_cmd(["/usr/local/bin/gta8-keyboard", "toggle"])
+
+                    # 4-finger swipe -> App Grid / Dock
+                    elif g_max_fingers >= 4 and cur_n >= 4 and not g_swipe_fired:
+                        sx = sum(p["sx"] for p in pts) / len(pts)
+                        sy = sum(p["sy"] for p in pts) / len(pts)
+                        sdx, sdy = out_st.raw_delta_to_screen(mx - sx, my - sy)
+                        if abs(sdy) > 95:
+                            g_swipe_fired = True
+                            if sdy < 0:
+                                run_user_cmd(["/usr/local/bin/gta8-app-grid"])
+                            else:
+                                run_user_cmd(["pkill", "-USR1", "-f", "/usr/local/bin/gta8-dock"])
+
+                else:
+                    # All fingers lifted! Check tap gestures
+                    dt = time.monotonic() - g_start_t
+                    if not g_scroll_started and not g_swipe_fired and g_max_travel < 45 and dt < 0.36:
+                        lx, ly = out_st.raw_to_logical(g_last_mx, g_last_my)
+                        if g_max_fingers == 2:
+                            wf_call("stipc/move_cursor", {"x": lx, "y": ly})
+                            time.sleep(0.015)
+                            mouse.write(e.EV_KEY, e.BTN_RIGHT, 1); mouse.syn()
+                            time.sleep(0.02)
+                            mouse.write(e.EV_KEY, e.BTN_RIGHT, 0); mouse.syn()
+                        elif g_max_fingers == 3:
+                            wf_call("stipc/move_cursor", {"x": lx, "y": ly})
+                            time.sleep(0.015)
+                            mouse.write(e.EV_KEY, e.BTN_MIDDLE, 1); mouse.syn()
+                            time.sleep(0.02)
+                            mouse.write(e.EV_KEY, e.BTN_MIDDLE, 0); mouse.syn()
+                        elif g_max_fingers >= 4:
+                            run_user_cmd(["/usr/local/bin/gta8-app-grid"])
+                    reset_gesture()
+
+        while running:
+            timeout = 0.015 if mode == "PENDING" else 0.5
+            rlist, _, _ = select.select([touch_src.fd, srv], [], [], timeout)
+
+            if mode == "PENDING" and (time.monotonic() - pending_t0) >= 0.080:
+                enter_passthrough(pending_buf)
+
+            if srv in rlist:
+                try:
+                    data = srv.recv(4096)
+                    pkt = json.loads(data.decode())
+                    if "keys" in pkt:
+                        send_vkbd_keys(vkbd, [int(k) for k in pkt["keys"]])
+                    elif "down" in pkt:
+                        vkbd.write(e.EV_KEY, int(pkt["down"]), 1); vkbd.syn()
+                    elif "up" in pkt:
+                        vkbd.write(e.EV_KEY, int(pkt["up"]), 0); vkbd.syn()
+                except Exception:
+                    pass
+
+            if touch_src.fd in rlist:
+                try:
+                    for ev in touch_src.read():
+                        if ev.type == e.EV_SYN and ev.code == e.SYN_REPORT:
+                            handle_syn(frame_events)
+                            frame_events = []
+                        elif ev.type == e.EV_ABS:
+                            if ev.code == e.ABS_MT_SLOT:
+                                cur_slot = ev.value
+                                slots.setdefault(cur_slot, {"id": -1, "x": 0, "y": 0})
+                            elif ev.code == e.ABS_MT_TRACKING_ID:
+                                slots.setdefault(cur_slot, {"id": -1, "x": 0, "y": 0})["id"] = ev.value
+                            elif ev.code == e.ABS_MT_POSITION_X:
+                                slots.setdefault(cur_slot, {"id": -1, "x": 0, "y": 0})["x"] = ev.value
+                            elif ev.code == e.ABS_MT_POSITION_Y:
+                                slots.setdefault(cur_slot, {"id": -1, "x": 0, "y": 0})["y"] = ev.value
+                            frame_events.append((ev.type, ev.code, ev.value))
+                        elif ev.type == e.EV_KEY:
+                            frame_events.append((ev.type, ev.code, ev.value))
+                except BlockingIOError:
+                    pass
+    finally:
+        try: touch_src.ungrab()
+        except Exception: pass
+        try: touch_src.close()
+        except Exception: pass
+        try: vkbd.close(); mouse.close(); touch_out.close()
+        except Exception: pass
+        if os.path.exists(SOCK_PATH):
+            try: os.remove(SOCK_PATH)
+            except Exception: pass
+
+if __name__ == "__main__":
+    main()
