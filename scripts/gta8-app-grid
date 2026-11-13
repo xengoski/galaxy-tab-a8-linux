@@ -1,0 +1,256 @@
+#!/usr/bin/env python3
+import os, signal, sys
+import gi
+gi.require_version("Gdk", "3.0")
+gi.require_version("Gtk", "3.0")
+gi.require_version("GtkLayerShell", "0.1")
+from gi.repository import Gdk, Gio, GLib, Gtk, GtkLayerShell
+
+PIDFILE = f"/run/user/{os.getuid()}/gta8-app-grid.pid"
+
+if os.path.exists(PIDFILE):
+    try:
+        old = int(open(PIDFILE).read().strip())
+        cmd = ""
+        try:
+            cmd = open(f"/proc/{old}/cmdline", "rb").read().decode(errors="ignore")
+        except Exception:
+            pass
+        if "gta8-app-grid" in cmd:
+            os.kill(old, signal.SIGTERM)
+            try:
+                os.remove(PIDFILE)
+            except Exception:
+                pass
+            sys.exit(0)
+    except Exception:
+        pass
+
+with open(PIDFILE, "w") as f:
+    f.write(str(os.getpid()))
+
+CSS = b"""
+window {
+    background-color: rgba(18, 20, 26, 0.58);
+    color: #ffffff;
+    font-family: Cantarell, sans-serif;
+}
+entry.search {
+    background-color: rgba(255, 255, 255, 0.14);
+    color: #ffffff;
+    border: 1px solid rgba(255, 255, 255, 0.24);
+    border-radius: 22px;
+    padding: 10px 18px;
+    font-size: 16px;
+    min-height: 44px;
+}
+entry.search:focus {
+    border-color: rgba(10, 132, 255, 0.85);
+    background-color: rgba(255, 255, 255, 0.18);
+}
+button.app-tile {
+    background: rgba(255, 255, 255, 0.06);
+    border: 1px solid rgba(255, 255, 255, 0.10);
+    border-radius: 20px;
+    padding: 12px 8px;
+    color: #ffffff;
+}
+button.app-tile:hover, button.app-tile:active {
+    background: rgba(10, 132, 255, 0.34);
+    border-color: rgba(10, 132, 255, 0.85);
+}
+button.close-btn {
+    background: rgba(255, 255, 255, 0.14);
+    color: #ffffff;
+    border: 1px solid rgba(255, 255, 255, 0.14);
+    border-radius: 99px;
+    padding: 8px 18px;
+    font-weight: 600;
+}
+button.close-btn:hover, button.close-btn:active {
+    background: rgba(255, 255, 255, 0.24);
+}
+scrollbar slider {
+    background-color: rgba(255, 255, 255, 0.28);
+    border-radius: 99px;
+    min-width: 6px;
+}
+"""
+
+HIDE_PREFIXES = (
+    "kcm_", "kdesystemsettings", "systemsettings", "ktelnet",
+    "qv4l2", "qvidcap", "htop", "vim", "nvim", "xterm", "uxterm",
+    "maliit-", "mobi.phosh.PhoshTour", "org.gnome.Shell",
+    "org.gnome.Extensions", "com.mattjakeman.ExtensionManager",
+    "wayland-logout", "droidian-camera",
+    "org.gnome.eog", "org.gnome.Terminal",
+    "org.kde.kded", "org.kde.kwallet", "org.kde.kiod",
+    "org.kde.plasma", "org.kde.polkit", "org.kde.drkonqi",
+    "nm-connection-editor", "fcitx", "org.fcitx", "ibus",
+    "org.freedesktop.IBus",
+)
+
+def load_apps():
+    seen = set()
+    apps = []
+    for info in Gio.AppInfo.get_all():
+        if not info.should_show():
+            continue
+        aid = info.get_id() or ""
+        if not aid or aid in seen or any(aid.startswith(p) for p in HIDE_PREFIXES):
+            continue
+        seen.add(aid)
+        apps.append(info)
+    apps.sort(key=lambda a: (a.get_display_name() or "").lower())
+    return apps
+
+class LauncherWindow(Gtk.Window):
+    def __init__(self):
+        super().__init__()
+        GtkLayerShell.init_for_window(self)
+        GtkLayerShell.set_layer(self, GtkLayerShell.Layer.OVERLAY)
+        GtkLayerShell.set_namespace(self, "gta8-launcher")
+        for edge in (GtkLayerShell.Edge.TOP, GtkLayerShell.Edge.BOTTOM, GtkLayerShell.Edge.LEFT, GtkLayerShell.Edge.RIGHT):
+            GtkLayerShell.set_anchor(self, edge, True)
+        GtkLayerShell.set_keyboard_mode(self, GtkLayerShell.KeyboardMode.ON_DEMAND)
+
+        prov = Gtk.CssProvider()
+        prov.load_from_data(CSS)
+        Gtk.StyleContext.add_provider_for_screen(Gdk.Screen.get_default(), prov, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
+
+        self.cur_cols = 0
+        root = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=16)
+        root.set_margin_top(24)
+        root.set_margin_bottom(20)
+        root.set_margin_start(22)
+        root.set_margin_end(22)
+        self.add(root)
+
+        top = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+        self.search = Gtk.SearchEntry()
+        self.search.set_placeholder_text("Search Applications...")
+        self.search.get_style_context().add_class("search")
+        self.search.connect("search-changed", self.on_filter)
+        top.pack_start(self.search, True, True, 0)
+
+        close_btn = Gtk.Button(label="✕ Close")
+        close_btn.get_style_context().add_class("close-btn")
+        close_btn.connect("clicked", lambda *_: self.quit())
+        top.pack_end(close_btn, False, False, 0)
+        root.pack_start(top, False, False, 0)
+
+        sw = Gtk.ScrolledWindow()
+        sw.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+        sw.set_kinetic_scrolling(True)
+        sw.set_overlay_scrolling(True)
+        root.pack_start(sw, True, True, 0)
+
+        self.flow = Gtk.FlowBox()
+        self.flow.set_valign(Gtk.Align.START)
+        self.flow.set_halign(Gtk.Align.CENTER)
+        self.flow.set_row_spacing(14)
+        self.flow.set_column_spacing(14)
+        self.flow.set_homogeneous(True)
+        self.flow.set_selection_mode(Gtk.SelectionMode.NONE)
+        self.flow.set_activate_on_single_click(False)
+        sw.add(self.flow)
+
+        self.items = []
+        for app in load_apps():
+            box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+            box.set_valign(Gtk.Align.CENTER)
+            gicon = app.get_icon()
+            if gicon is not None:
+                img = Gtk.Image.new_from_gicon(gicon, Gtk.IconSize.DIALOG)
+            else:
+                img = Gtk.Image.new_from_icon_name("application-x-executable", Gtk.IconSize.DIALOG)
+            img.set_pixel_size(58)
+            lbl = Gtk.Label(label=app.get_display_name() or app.get_name())
+            lbl.set_max_width_chars(14)
+            lbl.set_ellipsize(3)
+            lbl.set_line_wrap(True)
+            lbl.set_lines(2)
+            lbl.set_justify(Gtk.Justification.CENTER)
+            box.pack_start(img, False, False, 0)
+            box.pack_start(lbl, False, False, 0)
+
+            btn = Gtk.Button()
+            btn.get_style_context().add_class("app-tile")
+            btn.set_size_request(142, 124)
+            btn.add(box)
+            btn.connect("clicked", self.on_launch, app)
+            self.flow.add(btn)
+            self.items.append((btn, app))
+
+        self.update_cols(self.get_screen_width())
+        self.connect("size-allocate", self.on_size_alloc)
+        self.connect("key-press-event", self.on_key)
+        self.show_all()
+
+    def get_screen_width(self):
+        try:
+            disp = Gdk.Display.get_default()
+            mon = disp.get_primary_monitor() or disp.get_monitor(0)
+            if mon:
+                return mon.get_geometry().width
+        except Exception:
+            pass
+        return 800
+
+    def update_cols(self, width):
+        cols = 6 if width >= 980 else 4
+        if cols == self.cur_cols:
+            return
+        self.cur_cols = cols
+        self.flow.set_min_children_per_line(cols)
+        self.flow.set_max_children_per_line(cols)
+        w = 152 if cols == 6 else 142
+        h = 128 if cols == 6 else 122
+        for btn, _ in self.items:
+            btn.set_size_request(w, h)
+
+    def on_size_alloc(self, widget, rect):
+        self.update_cols(rect.width)
+
+    def on_key(self, widget, event):
+        if event.keyval == Gdk.KEY_Escape:
+            self.quit()
+            return True
+        return False
+
+    def on_filter(self, entry):
+        q = entry.get_text().strip().lower()
+        for btn, app in self.items:
+            dname = app.get_display_name() or ""
+            desc = app.get_description() or ""
+            aid = app.get_id() or ""
+            hay = f"{dname} {desc} {aid}".lower()
+            btn.get_parent().set_visible(q in hay)
+
+    def on_launch(self, btn, app):
+        try:
+            ctx = Gdk.Display.get_default().get_app_launch_context()
+            app.launch([], ctx)
+        except Exception as e:
+            print("LAUNCH_ERR:", e, file=sys.stderr)
+        GLib.idle_add(self.quit)
+
+    def quit(self):
+        try:
+            if os.path.exists(PIDFILE):
+                os.remove(PIDFILE)
+        except Exception:
+            pass
+        Gtk.main_quit()
+
+def on_sig(*_):
+    try:
+        os.remove(PIDFILE)
+    except Exception:
+        pass
+    sys.exit(0)
+
+signal.signal(signal.SIGTERM, on_sig)
+signal.signal(signal.SIGINT, on_sig)
+LauncherWindow()
+Gtk.main()
