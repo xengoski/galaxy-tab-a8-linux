@@ -1,0 +1,11 @@
+[Unit]
+Description=Galaxy Tab A8 Max Performance & GPU Clocks Lock
+After=gta8-modules.service multi-user.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/gta8-performance-mode on
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,30 @@
+#!/bin/bash
+# ==============================================================================
+# PanVK High-Performance Game Launcher Wrapper
+# Launches any game or emulator with maximum PanVK Vulkan and Zink optimizations
+# ==============================================================================
+if [ $# -eq 0 ]; then
+    echo "Usage: panvk-run <command> [args...]"
+    echo "Example: panvk-run retroarch"
+    echo "Example: panvk-run vkmark --winsys wayland"
+    exit 1
+fi
+
+# Ensure PanVK Vulkan ICD is selected
+export VK_ICD_FILENAMES=/etc/vulkan/icd.d/panfrost_icd.json
+
+# PanVK Bifrost JM optimizations
+export PANVK_KBASE_JM_WARMUP=1
+export PANVK_KBASE_STRICT_DEVICE_CLOCK=0
+export MESA_VK_WSI_PRESENT_MODE=mailbox
+
+# Enable Zink OpenGL-on-Vulkan translation for Desktop OpenGL games
+export MESA_LOADER_DRIVER_OVERRIDE=zink
+export GALLIUM_DRIVER=zink
+
+# Boost process scheduling priority if root/sudo
+if [ "$(id -u)" -eq 0 ]; then
+    renice -n -5 $$ >/dev/null 2>&1 || true
+fi
+
+exec "$@"

@@ -43,6 +43,8 @@ install -m 755 "${BASE_DIR}/scripts/startwayfire-gnome" /usr/local/bin/
 install -m 755 "${BASE_DIR}/scripts/reboot-droidian" /usr/local/bin/
 install -m 755 "${BASE_DIR}/scripts/boot-android" /usr/local/bin/
 install -m 755 "${BASE_DIR}/scripts/helium-wayland" /usr/local/bin/
+install -m 755 "${BASE_DIR}/scripts/gta8-performance-mode" /usr/local/bin/
+install -m 755 "${BASE_DIR}/scripts/panvk-run" /usr/local/bin/
 install -m 755 "${BASE_DIR}/scripts/gta8-input-daemon" /usr/local/sbin/
 
 echo "[+] 3. Installing systemd units..."
@@ -52,6 +54,7 @@ systemctl enable gta8-usb-debug.service
 systemctl enable gta8-modules.service
 systemctl enable gta8-wifi.service
 systemctl enable gta8-input-daemon.service
+systemctl enable gta8-performance.service
 
 echo "[+] 4. Installing desktop environment and shell configs..."
 mkdir -p /etc/gta8-gnome

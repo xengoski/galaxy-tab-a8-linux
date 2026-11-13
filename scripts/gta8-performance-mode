@@ -1,0 +1,105 @@
+#!/bin/bash
+# ==============================================================================
+# GTA8 Performance & Gaming Governor Optimization Script
+# Overclocks / locks Mali-G52 MP2 GPU and Unisoc Tiger T618 CPU cores to max frequencies
+# ==============================================================================
+set -euo pipefail
+
+GPU_DEV="/sys/class/devfreq/60000000.gpu"
+DPU_DEV="/sys/class/devfreq/dpu"
+CPU_POLICY0="/sys/devices/system/cpu/cpufreq/policy0"
+CPU_POLICY6="/sys/devices/system/cpu/cpufreq/policy6"
+
+mode="${1:-status}"
+
+set_max_performance() {
+    echo "[+] Activating MAX Performance Gaming Profile..."
+    
+    # 1. GPU: Lock Mali-G52 MP2 to maximum 850 MHz (from default 384 MHz idle)
+    if [ -d "$GPU_DEV" ]; then
+        echo 850000000 > "$GPU_DEV/min_freq" 2>/dev/null || true
+        echo 850000000 > "$GPU_DEV/max_freq" 2>/dev/null || true
+        echo "[*] GPU Frequency locked to: $(cat "$GPU_DEV/cur_freq") Hz (850 MHz)"
+    fi
+
+    # 2. CPU: Switch all 8 cores (2x A75 + 6x A55) to performance governor
+    if [ -d "$CPU_POLICY0" ]; then
+        echo "performance" > "$CPU_POLICY0/scaling_governor" 2>/dev/null || true
+        echo "[*] Little Cores (A55) Frequency: $(cat "$CPU_POLICY0/scaling_cur_freq") kHz"
+    fi
+    if [ -d "$CPU_POLICY6" ]; then
+        echo "performance" > "$CPU_POLICY6/scaling_governor" 2>/dev/null || true
+        echo "[*] Big Cores (A75) Frequency: $(cat "$CPU_POLICY6/scaling_cur_freq") kHz"
+    fi
+
+    # 3. DPU / Memory Matrix: Boost display engine to 384 MHz
+    if [ -d "$DPU_DEV" ]; then
+        echo 384000000 > "$DPU_DEV/min_freq" 2>/dev/null || true
+        echo "[*] DPU Frequency: $(cat "$DPU_DEV/cur_freq") Hz"
+    fi
+
+    # 4. Kernel Latency & Memory Writeback tuning for 60+ FPS gaming
+    sysctl -w vm.dirty_ratio=10 >/dev/null 2>&1 || true
+    sysctl -w vm.dirty_background_ratio=5 >/dev/null 2>&1 || true
+    sysctl -w kernel.sched_migration_cost_ns=500000 >/dev/null 2>&1 || true
+
+    echo "[+] MAX Performance Mode Activated!"
+}
+
+set_balanced() {
+    echo "[+] Restoring Balanced Profile..."
+    
+    if [ -d "$GPU_DEV" ]; then
+        echo 384000000 > "$GPU_DEV/min_freq" 2>/dev/null || true
+        echo 850000000 > "$GPU_DEV/max_freq" 2>/dev/null || true
+        echo "[*] GPU Frequency scaled to: $(cat "$GPU_DEV/cur_freq") Hz"
+    fi
+
+    if [ -d "$CPU_POLICY0" ]; then
+        echo "schedutil" > "$CPU_POLICY0/scaling_governor" 2>/dev/null || true
+    fi
+    if [ -d "$CPU_POLICY6" ]; then
+        echo "schedutil" > "$CPU_POLICY6/scaling_governor" 2>/dev/null || true
+    fi
+
+    if [ -d "$DPU_DEV" ]; then
+        echo 153600000 > "$DPU_DEV/min_freq" 2>/dev/null || true
+    fi
+
+    echo "[+] Balanced Mode Restored."
+}
+
+show_status() {
+    echo "======================================================="
+    echo "      Samsung Galaxy Tab A8 LTE Hardware Clocks        "
+    echo "======================================================="
+    if [ -d "$GPU_DEV" ]; then
+        echo "Mali-G52 GPU Current Freq: $(($(cat "$GPU_DEV/cur_freq") / 1000000)) MHz (Min: $(($(cat "$GPU_DEV/min_freq") / 1000000)) MHz, Max: $(($(cat "$GPU_DEV/max_freq") / 1000000)) MHz)"
+    fi
+    if [ -d "$CPU_POLICY0" ]; then
+        echo "Cortex-A55 Little Cores:   $(cat "$CPU_POLICY0/scaling_governor") @ $(($(cat "$CPU_POLICY0/scaling_cur_freq") / 1000)) MHz"
+    fi
+    if [ -d "$CPU_POLICY6" ]; then
+        echo "Cortex-A75 Big Cores:      $(cat "$CPU_POLICY6/scaling_governor") @ $(($(cat "$CPU_POLICY6/scaling_cur_freq") / 1000)) MHz"
+    fi
+    if [ -d "$DPU_DEV" ]; then
+        echo "DPU Display Clock:         $(($(cat "$DPU_DEV/cur_freq") / 1000000)) MHz"
+    fi
+    echo "======================================================="
+}
+
+case "$mode" in
+    on|game|max|performance)
+        set_max_performance
+        ;;
+    off|balanced|normal|schedutil)
+        set_balanced
+        ;;
+    status|info)
+        show_status
+        ;;
+    *)
+        echo "Usage: $0 {on|off|status}"
+        exit 1
+        ;;
+esac
