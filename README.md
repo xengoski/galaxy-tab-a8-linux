@@ -31,6 +31,13 @@ Dual-boots with Samsung Android without overwriting Android user data, featuring
 - **Universal Touch Virtual Keyboard (`gta8-keyboard`):**
   - High-performance `/dev/uinput` touch keyboard daemon accessible globally on top of any Wayland or XWayland application.
   - Integrated `ext-session-lock-v1` secure lockscreen with embedded virtual keyboard.
+- **Native Wayfire Screenshot Engine (`libgta8-screenshot.so`):**
+  - Custom C++ Wayfire compositor plugin capturing pre-swap GLES offscreen framebuffers directly.
+  - Completely solves the black-screen readback artifact caused by Android `hwcomposer` AFBC buffer compression.
+  - Triggered via physical **Power + Volume Down** hardware chord or UI shortcuts, complete with shutter sound and notification previews.
+- **Samsung Fast Charging & Power Engine (`gta8-charging`):**
+  - Full Samsung Adaptive Fast Charging (AFC 9V @ 1.67A / 15W) and USB-PD negotiation in the Linux kernel power subsystem.
+  - Dynamic JEITA thermal monitoring and real-time power metrics CLI dashboard.
 - **Modern BigSur Dark Theme & Visual Effects:**
   - `WhiteSur-Dark` GTK3 & GTK4 / Libadwaita styling + bold `WhiteSur-dark` icons.
   - Frosted translucent Kawase glass blur (`libblur.so`) on dock, bar, and popups.
@@ -67,6 +74,7 @@ Dual-boots with Samsung Android without overwriting Android user data, featuring
 
 - [Architecture & Design Details](docs/ARCHITECTURE.md)
 - [Hardware Support Matrix](docs/HARDWARE_STATUS.md)
+- [Fast Charging (AFC & USB-PD)](docs/FAST_CHARGING.md)
 - [Dual-Boot Setup & Magisk Module](docs/DUAL_BOOT_GUIDE.md)
 - [Input Daemon & Gesture Engine](docs/GESTURES_AND_INPUT.md)
 - [Themes, Blur & Window Effects](docs/THEMES_AND_EFFECTS.md)

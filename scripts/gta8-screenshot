@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# Galaxy Tab A8 - Native Screenshot Utility (using Wayfire IPC screenshot plugin)
 TARGET_USER="droidian"
 TARGET_UID="32011"
 DIR="/home/${TARGET_USER}/Pictures/Screenshots"
@@ -7,14 +8,8 @@ mkdir -p "$DIR" 2>/dev/null || true
 TIMESTAMP=$(date +"%Y-%m-%d_%H-%M-%S")
 FILE="${DIR}/Screenshot_${TIMESTAMP}.png"
 
-if [ "$(id -u)" -eq 0 ]; then
-    chown "${TARGET_USER}:${TARGET_USER}" "$DIR" 2>/dev/null || true
-    su - "${TARGET_USER}" -c "WAYLAND_DISPLAY=wayland-0 XDG_RUNTIME_DIR=/run/user/${TARGET_UID} grim '${FILE}'"
-else
-    export WAYLAND_DISPLAY="wayland-0"
-    export XDG_RUNTIME_DIR="/run/user/${TARGET_UID}"
-    grim "${FILE}"
-fi
+# Call Wayfire IPC screenshot plugin (captures pre-swap GLES FBO)
+RESULT=$(/usr/local/bin/gta8-wayfire-ipc screenshot "${FILE}" 2>/dev/null)
 
 if [ -f "${FILE}" ]; then
     [ "$(id -u)" -eq 0 ] && chown "${TARGET_USER}:${TARGET_USER}" "${FILE}" 2>/dev/null || true
@@ -26,13 +21,18 @@ if [ -f "${FILE}" ]; then
         notify-send -a "Screenshot" -i "${FILE}" "Screenshot Captured" "Saved to Pictures/Screenshots/" >/dev/null 2>&1 &
     fi
     
-    # Shutter sound
+    # Shutter sound (PulseAudio / PipeWire with timeout so it never hangs)
     SOUND="/usr/share/sounds/freedesktop/stereo/screen-capture.oga"
     if [ -f "$SOUND" ]; then
         if [ "$(id -u)" -eq 0 ]; then
-            su - "${TARGET_USER}" -c "pw-play '$SOUND' 2>/dev/null || paplay '$SOUND' 2>/dev/null" >/dev/null 2>&1 &
+            su - "${TARGET_USER}" -c "XDG_RUNTIME_DIR=/run/user/${TARGET_UID} timeout 1 paplay '$SOUND' 2>/dev/null || timeout 1 pw-play '$SOUND' 2>/dev/null" >/dev/null 2>&1 &
         else
-            pw-play "$SOUND" >/dev/null 2>&1 &
+            timeout 1 paplay "$SOUND" 2>/dev/null || timeout 1 pw-play "$SOUND" 2>/dev/null &
         fi
     fi
+    echo "Screenshot saved to ${FILE}"
+    exit 0
+else
+    echo "Screenshot capture failed: ${RESULT}" >&2
+    exit 1
 fi

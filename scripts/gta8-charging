@@ -1,0 +1,181 @@
+#!/usr/bin/env python3
+"""
+Galaxy Tab A8 (SM-X205) Battery & Fast Charging Monitor
+Inspects Samsung Adaptive Fast Charging (AFC), USB Power Delivery (PD),
+JEITA thermal curves, and real-time power metrics via Linux sysfs.
+"""
+
+import os
+import sys
+import time
+import json
+import argparse
+
+BATTERY_PATH = "/sys/class/power_supply/battery"
+SGM_PATH = "/sys/class/power_supply/sgm4154x_charger"
+SC2730_PATH = "/sys/class/power_supply/sc2730_fast_charger"
+USB_PATH = "/sys/class/power_supply/usb"
+PD_PATH = "/sys/class/power_supply/tcpm-source-psy-sc27xx-pd"
+
+def read_sysfs(path, filename, default=None):
+    p = os.path.join(path, filename)
+    try:
+        with open(p, "r") as f:
+            return f.read().strip()
+    except Exception:
+        return default
+
+def read_sysfs_int(path, filename, default=0):
+    val = read_sysfs(path, filename, None)
+    if val is None:
+        return default
+    try:
+        return int(val)
+    except ValueError:
+        return default
+
+def get_selected_usb_type(raw):
+    if not raw:
+        return "Disconnected"
+    import re
+    m = re.search(r'\[([^\]]+)\]', raw)
+    if m:
+        return m.group(1)
+    return raw
+
+def collect_charging_data():
+    status = read_sysfs(BATTERY_PATH, "status", "Unknown")
+    capacity = read_sysfs_int(BATTERY_PATH, "capacity", 0)
+    health = read_sysfs(BATTERY_PATH, "health", "Unknown")
+    temp_raw = read_sysfs_int(BATTERY_PATH, "temp", 0)
+    temp_c = temp_raw / 10.0 if temp_raw else 0.0
+
+    v_now_uv = read_sysfs_int(BATTERY_PATH, "voltage_now", 0)
+    v_now = v_now_uv / 1000000.0
+
+    i_now_ua = read_sysfs_int(BATTERY_PATH, "current_now", 0)
+    i_now_ma = i_now_ua / 1000.0
+
+    power_w = abs(v_now * (i_now_ma / 1000.0))
+
+    afc_result = read_sysfs_int(BATTERY_PATH, "afc_result", 0)
+    hv_status = read_sysfs_int(BATTERY_PATH, "hv_charger_status", 0)
+    hv_disable = read_sysfs_int(BATTERY_PATH, "hv_disable", 0)
+
+    charge_full = read_sysfs_int(BATTERY_PATH, "charge_full", 0) // 1000
+    charge_full_design = read_sysfs_int(BATTERY_PATH, "charge_full_design", 0) // 1000
+    batt_type = read_sysfs(BATTERY_PATH, "battery_type", "HQ-6300NA-ATL (Samsung)")
+
+    sgm_usb_type_raw = read_sysfs(SGM_PATH, "usb_type", "")
+    sgm_usb_type = get_selected_usb_type(sgm_usb_type_raw)
+
+    sc_usb_type_raw = read_sysfs(SC2730_PATH, "usb_type", "")
+    sc_usb_type = get_selected_usb_type(sc_usb_type_raw)
+
+    usb_online = read_sysfs_int(USB_PATH, "online", 0) == 1 or read_sysfs_int(SGM_PATH, "online", 0) == 1
+
+    # Fast charge mode evaluation
+    fast_charging = (afc_result == 1) or (hv_status == 1) or (sgm_usb_type in ("AFC", "PD", "PD_PPS"))
+    
+    protocol = "Standard 5V"
+    if afc_result == 1 or sgm_usb_type == "AFC":
+        protocol = "Samsung Adaptive Fast Charging (AFC 9V / 15W)"
+    elif sgm_usb_type in ("PD", "PD_PPS") or sc_usb_type in ("PD", "PD_DRP"):
+        protocol = "USB Power Delivery (USB-PD 15W)"
+    elif sgm_usb_type == "DCP":
+        protocol = "Dedicated Charging Port (DCP 5V ~2A)"
+    elif sgm_usb_type == "CDP":
+        protocol = "Charging Downstream Port (CDP 5V 1.5A)"
+    elif sgm_usb_type == "SDP":
+        protocol = "Standard Downstream Port (PC USB 5V 500mA)"
+    elif not usb_online and status == "Discharging":
+        protocol = "Battery Only (Discharging)"
+
+    return {
+        "status": status,
+        "capacity_percent": capacity,
+        "health": health,
+        "temperature_c": temp_c,
+        "voltage_v": round(v_now, 3),
+        "current_ma": round(i_now_ma, 1),
+        "power_watts": round(power_w, 2),
+        "fast_charging_active": fast_charging,
+        "high_voltage_active": (hv_status == 1),
+        "high_voltage_supported": (hv_disable == 0),
+        "afc_negotiated": (afc_result == 1),
+        "protocol": protocol,
+        "charger_negotiation": {
+            "sgm4154x": sgm_usb_type,
+            "sc2730_fchg": sc_usb_type,
+        },
+        "battery_info": {
+            "model": batt_type,
+            "full_mah": charge_full,
+            "design_mah": charge_full_design,
+        }
+    }
+
+def print_dashboard(data):
+    GREEN = "\033[92m"
+    YELLOW = "\033[93m"
+    CYAN = "\033[96m"
+    RED = "\033[91m"
+    BOLD = "\033[1m"
+    RESET = "\033[0m"
+
+    print(f"\n{BOLD}{CYAN}=== Samsung Galaxy Tab A8 Charging & Battery Monitor ==={RESET}")
+    print(f" {BOLD}State:{RESET}            {GREEN if data['status'] == 'Charging' else YELLOW}{data['status']}{RESET} ({data['capacity_percent']}%)")
+    print(f" {BOLD}Health & Temp:{RESET}    {data['health']} | {data['temperature_c']} °C")
+    print(f" {BOLD}Cell Voltage:{RESET}     {data['voltage_v']} V")
+    
+    cur_str = f"{data['current_ma']} mA"
+    rate_str = f"{data['power_watts']} W"
+    if data['current_ma'] > 0:
+        print(f" {BOLD}Charge Current:{RESET}   {GREEN}+{cur_str}{RESET} (Rate: {GREEN}{rate_str}{RESET})")
+    elif data['current_ma'] < 0:
+        print(f" {BOLD}Discharge Rate:{RESET}   {YELLOW}{cur_str}{RESET} (Drain: {YELLOW}{rate_str}{RESET})")
+    else:
+        print(f" {BOLD}Current Flow:{RESET}     0 mA")
+
+    print(f"\n{BOLD}--- Charging Protocol & Hardware Controllers ---{RESET}")
+    print(f" {BOLD}Active Protocol:{RESET}  {GREEN if data['fast_charging_active'] else CYAN}{data['protocol']}{RESET}")
+    
+    afc_status = f"{GREEN}YES (Active 9V){RESET}" if data['afc_negotiated'] else f"{YELLOW}Inactive (5V / Disconnected){RESET}"
+    hv_status = f"{GREEN}ACTIVE (9V negotiated){RESET}" if data['high_voltage_active'] else f"{YELLOW}5V Normal{RESET}"
+    hv_cap = f"{GREEN}Enabled in kernel (hv_disable=0){RESET}" if data['high_voltage_supported'] else f"{RED}Disabled{RESET}"
+
+    print(f" {BOLD}Samsung AFC:{RESET}      {afc_status}")
+    print(f" {BOLD}High Voltage (9V):{RESET}{hv_status}")
+    print(f" {BOLD}AFC/HV Support:{RESET}   {hv_cap}")
+    print(f" {BOLD}Charger IC:{RESET}       SGM4154x on I2C [type: {data['charger_negotiation']['sgm4154x']}]")
+    print(f" {BOLD}Fast Charge PMIC:{RESET} Unisoc SC2730 FCHG [type: {data['charger_negotiation']['sc2730_fchg']}]")
+    print(f" {BOLD}Battery Pack:{RESET}     {data['battery_info']['model']} ({data['battery_info']['full_mah']} mAh)\n")
+
+def main():
+    parser = argparse.ArgumentParser(description="Galaxy Tab A8 Charging Monitor")
+    parser.add_argument("--json", action="store_true", help="Output pure JSON")
+    parser.add_argument("-w", "--watch", action="store_true", help="Continuously refresh every second")
+    args = parser.parse_args()
+
+    if args.watch:
+        try:
+            while True:
+                os.system("clear" if os.name == "posix" else "cls")
+                data = collect_charging_data()
+                if args.json:
+                    print(json.dumps(data, indent=2))
+                else:
+                    print_dashboard(data)
+                time.sleep(1)
+        except KeyboardInterrupt:
+            print("\nExiting.")
+            sys.exit(0)
+    else:
+        data = collect_charging_data()
+        if args.json:
+            print(json.dumps(data, indent=2))
+        else:
+            print_dashboard(data)
+
+if __name__ == "__main__":
+    main()

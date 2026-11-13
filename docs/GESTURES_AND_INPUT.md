@@ -64,8 +64,12 @@ To resolve these challenges, this port implements a **universal virtual keyboard
 
 ## 3. Gestures & Touch Navigation
 
-The tablet touchscreen uses `/usr/local/sbin/gta8-input-daemon` to listen directly to multi-touch slots (`ABS_MT_SLOT`, `ABS_MT_POSITION_X`, `ABS_MT_POSITION_Y`):
-- **2-Finger Kinetic Scroll:** Smooth two-finger vertical/horizontal drag converted to smooth high-resolution mouse wheel events (`REL_WHEEL`).
+The tablet touchscreen uses `/usr/local/sbin/gta8-input-daemon` and Wayfire edge-gesture bindings:
+- **Pull Down from Top Edge (`edge-swipe down 1`):** Android-style pull-down to open **GNOME Activities / Workspace Overview** (`scale/toggle`), giving one-touch access to open apps and search.
+- **Swipe Up from Bottom Edge (`edge-swipe up 1`):** Opens/closes universal **On-Screen Keyboard** (`gta8-keyboard toggle`).
+- **Swipe In from Right Edge (`edge-swipe right 1`):** Opens full-screen **Application Grid** (`gta8-app-grid`).
+- **Swipe In from Left Edge (`edge-swipe left 1`):** Overview window scaler.
+- **2-Finger Kinetic Scroll:** Smooth two-finger vertical/horizontal drag converted to high-resolution mouse wheel events (`REL_WHEEL`).
 - **Pinch-to-Zoom Filter:** Distinguishes pinch gestures from vertical scroll gestures by tracking Euclidean distance variance.
 - **3-Finger Swipe:** Workspace switching (`Super+Left`, `Super+Right` injected directly into Wayfire compositor).
 - **2-Finger Tap:** Emulates right-click (`BTN_RIGHT`).

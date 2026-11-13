@@ -1,7 +1,15 @@
 #!/usr/bin/env python3
-import json, os, socket, subprocess, sys
+import json, os, socket, subprocess, sys, time
 
-SOCK = os.environ.get("WAYFIRE_SOCKET") or f"/run/user/{os.getuid()}/wayfire-wayland-0-.socket"
+SOCK = os.environ.get("WAYFIRE_SOCKET")
+if not SOCK:
+    uid_sock = f"/run/user/{os.getuid()}/wayfire-wayland-0-.socket"
+    if os.path.exists(uid_sock):
+        SOCK = uid_sock
+    elif os.path.exists("/run/user/32011/wayfire-wayland-0-.socket"):
+        SOCK = "/run/user/32011/wayfire-wayland-0-.socket"
+    else:
+        SOCK = uid_sock
 
 def wf_call(method, data=None):
     s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
@@ -29,6 +37,49 @@ cmd = sys.argv[1] if len(sys.argv) > 1 else "status"
 
 if cmd == "overview":
     print(wf_call("scale/toggle"))
+elif cmd == "screenshot":
+    target = sys.argv[2] if len(sys.argv) > 2 else ""
+    if not target:
+        target_dir = "/home/droidian/Pictures/Screenshots"
+        os.makedirs(target_dir, exist_ok=True)
+        ts = time.strftime("%Y-%m-%d_%H-%M-%S")
+        target = f"{target_dir}/Screenshot_{ts}.png"
+    else:
+        td = os.path.dirname(os.path.abspath(target))
+        if td:
+            os.makedirs(td, exist_ok=True)
+
+    try:
+        if os.path.exists("/tmp/gta8-screenshot-done"):
+            os.unlink("/tmp/gta8-screenshot-done")
+    except Exception:
+        pass
+
+    res = wf_call("gta8/screenshot", {"path": target})
+    done = False
+    for _ in range(120):
+        if os.path.exists("/tmp/gta8-screenshot-done"):
+            try:
+                with open("/tmp/gta8-screenshot-done") as f:
+                    c = f.read().strip()
+                if c.startswith("OK"):
+                    done = True
+            except Exception:
+                pass
+            break
+        time.sleep(0.05)
+
+    if done and os.path.exists(target):
+        try:
+            import pwd
+            u = pwd.getpwnam("droidian")
+            os.chown(target, u.pw_uid, u.pw_gid)
+        except Exception:
+            pass
+        print(json.dumps({"result": "ok", "target": target, "size": os.path.getsize(target)}))
+    else:
+        print(json.dumps({"result": "error", "error": "Failed or timed out capturing screenshot", "ipc_res": res}))
+        sys.exit(1)
 elif cmd == "workspaces":
     try:
         outs = wf_call("window-rules/list-outputs")
