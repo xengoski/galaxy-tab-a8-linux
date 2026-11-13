@@ -1,0 +1,10 @@
+#!/bin/sh
+export EGL_PLATFORM=wayland
+export HYBRIS_PATCH_TLS=1
+export LD_PRELOAD="libtls-padding.so:libgtk6216workaround.so:libglesshadercache.so"
+exec /opt/helium/helium-wrapper \
+  --ozone-platform=wayland \
+  --enable-features=UseOzonePlatform \
+  --enable-unsafe-swiftshader \
+  --password-store=basic \
+  "$@"
