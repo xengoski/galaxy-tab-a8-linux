@@ -53,6 +53,22 @@ Dual-boots with Samsung Android without overwriting Android user data, featuring
 
 ---
 
+## Desktop & UI Showcase
+
+| Clean Desktop (16:10 Landscape) | Fast Charging & System Diagnostics |
+| :---: | :---: |
+| ![Clean Desktop](assets/screenshots/01_desktop_landscape.png) | ![Fast Charging](assets/screenshots/02_system_fastcharging.png) |
+
+| Kinetic Tablet App Drawer | Sliding Quick Settings / Control Center |
+| :---: | :---: |
+| ![App Drawer](assets/screenshots/03_app_grid.png) | ![Quick Settings](assets/screenshots/04_quick_settings.png) |
+
+| Universal On-Screen Touch Keyboard | Multi-Window Activities Overview |
+| :---: | :---: |
+| ![On-Screen Keyboard](assets/screenshots/05_on_screen_keyboard.png) | ![Activities Overview](assets/screenshots/06_activities_overview.png) |
+
+---
+
 ## Hardware Specifications
 
 | Attribute | Specification |

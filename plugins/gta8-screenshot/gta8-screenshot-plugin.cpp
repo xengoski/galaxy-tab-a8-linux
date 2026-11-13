@@ -144,16 +144,20 @@ public:
             int w = source.viewport_width;
             int h = source.viewport_height;
             std::string save_file = target_path;
+            bool is_landscape = false;
+            if (bound_output)
+            {
+                auto sz = bound_output->get_screen_size();
+                is_landscape = (sz.width > sz.height);
+            }
 
             if (w > 0 && h > 0)
             {
-                auto t0 = std::chrono::steady_clock::now();
                 std::vector<uint8_t> pixels(w * h * 4);
                 OpenGL::render_begin(source);
                 GL_CALL(glPixelStorei(GL_PACK_ALIGNMENT, 1));
                 GL_CALL(glReadPixels(0, 0, w, h, GL_RGBA, GL_UNSIGNED_BYTE, pixels.data()));
                 OpenGL::render_end();
-                auto t1 = std::chrono::steady_clock::now();
 
                 // Detach post hook immediately so next frame has zero hook overhead
                 if (bound_output && hook_attached)
@@ -164,22 +168,34 @@ public:
                 }
 
                 // Compress & write asynchronously in worker thread
-                std::thread([pixels = std::move(pixels), save_file, w, h, t0, t1]() mutable {
-                    auto t2 = std::chrono::steady_clock::now();
-                    stbi_flip_vertically_on_write(1);
+                std::thread([pixels = std::move(pixels), save_file, w, h, is_landscape]() mutable {
                     stbi_write_force_png_filter = 0;
                     stbi_write_png_compression_level = 1;
-                    int ok = stbi_write_png(save_file.c_str(), w, h, 4, pixels.data(), w * 4);
-                    auto t3 = std::chrono::steady_clock::now();
+                    int ok = 0;
 
-                    std::ofstream bench("/tmp/gta8-bench.txt");
-                    bench << "glReadPixels: " << std::chrono::duration_cast<std::chrono::milliseconds>(t1 - t0).count() << " ms\n";
-                    bench << "dispatch: " << std::chrono::duration_cast<std::chrono::milliseconds>(t2 - t1).count() << " ms\n";
-                    bench << "stbi_write_png: " << std::chrono::duration_cast<std::chrono::milliseconds>(t3 - t2).count() << " ms\n";
-                    bench.close();
+                    if (is_landscape && w < h)
+                    {
+                        // Rotate 90 degrees CCW to match landscape orientation (1920x1200)
+                        std::vector<uint32_t> rot(w * h);
+                        const uint32_t *src = reinterpret_cast<const uint32_t *>(pixels.data());
+                        for (int y = 0; y < h; ++y)
+                        {
+                            for (int x = 0; x < w; ++x)
+                            {
+                                rot[(w - 1 - x) * h + (h - 1 - y)] = src[y * w + x];
+                            }
+                        }
+                        stbi_flip_vertically_on_write(0);
+                        ok = stbi_write_png(save_file.c_str(), h, w, 4, rot.data(), h * 4);
+                    }
+                    else
+                    {
+                        stbi_flip_vertically_on_write(1);
+                        ok = stbi_write_png(save_file.c_str(), w, h, 4, pixels.data(), w * 4);
+                    }
 
                     std::ofstream token("/tmp/gta8-screenshot-done");
-                    token << (ok ? "OK" : "ERROR") << " " << w << "x" << h << "\n";
+                    token << (ok ? "OK" : "ERROR") << "\n";
                     token.close();
                 }).detach();
             }

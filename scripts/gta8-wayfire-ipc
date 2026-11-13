@@ -71,6 +71,17 @@ elif cmd == "screenshot":
 
     if done and os.path.exists(target):
         try:
+            from PIL import Image
+            im = Image.open(target)
+            if im.size[0] < im.size[1]:
+                outs = wf_call("window-rules/list-outputs")
+                if outs and outs[0].get("geometry", {}).get("width", 0) > outs[0].get("geometry", {}).get("height", 0):
+                    rot = im.transpose(Image.ROTATE_90)
+                    rot.save(target)
+        except Exception:
+            pass
+
+        try:
             import pwd
             u = pwd.getpwnam("droidian")
             os.chown(target, u.pw_uid, u.pw_gid)
