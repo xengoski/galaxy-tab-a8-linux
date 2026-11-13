@@ -14,6 +14,24 @@ def find_touch_device():
         d.close()
     return None
 
+def find_gpio_keys():
+    for p in evdev.list_devices():
+        try:
+            d = InputDevice(p)
+            if "gpio-keys" in d.name.lower():
+                return d
+            d.close()
+        except Exception:
+            pass
+    return None
+
+def is_screen_on():
+    try:
+        with open("/sys/class/backlight/sprd_backlight/brightness", "r") as f:
+            return int(f.read().strip()) > 0
+    except Exception:
+        return True
+
 def make_vkbd():
     keys = [
         e.KEY_ESC, e.KEY_1, e.KEY_2, e.KEY_3, e.KEY_4, e.KEY_5, e.KEY_6, e.KEY_7, e.KEY_8, e.KEY_9, e.KEY_0,
@@ -27,6 +45,7 @@ def make_vkbd():
         e.KEY_CAPSLOCK, e.KEY_F1, e.KEY_F2, e.KEY_F3, e.KEY_F4, e.KEY_F5, e.KEY_F6, e.KEY_F7, e.KEY_F8, e.KEY_F9, e.KEY_F10, e.KEY_F11, e.KEY_F12,
         e.KEY_HOME, e.KEY_UP, e.KEY_PAGEUP, e.KEY_LEFT, e.KEY_RIGHT, e.KEY_END, e.KEY_DOWN, e.KEY_PAGEDOWN, e.KEY_DELETE,
         e.KEY_LEFTMETA,
+        e.KEY_POWER, e.KEY_VOLUMEDOWN, e.KEY_VOLUMEUP,
     ]
     return UInput({e.EV_KEY: keys}, name="gta8-vkbd")
 
@@ -174,11 +193,29 @@ def main():
     signal.signal(signal.SIGINT, stop_sig)
 
     touch_src.grab()
+    keys_src = find_gpio_keys()
+    if keys_src:
+        try:
+            keys_src.grab()
+        except Exception as ex:
+            print(f"Warning: could not grab gpio-keys: {ex}", file=sys.stderr)
+            try: keys_src.close()
+            except Exception: pass
+            keys_src = None
+
     try:
         # Multitouch tracking state
         slots = {}          # slot_idx -> {"id": int, "x": int, "y": int}
         active = {}         # slot_idx -> {"sx": int, "sy": int, "x": int, "y": int}
         cur_slot = 0
+
+        # Hardware button state tracking (Power, VolDown, VolUp)
+        power_down = False
+        power_down_t = 0.0
+        voldown_down = False
+        voldown_down_t = 0.0
+        voldown_emitted = False
+        chord_triggered = False
         frame_events = []
 
         mode = "IDLE"       # IDLE, PENDING, PASSTHROUGH, GESTURE
@@ -461,7 +498,26 @@ def main():
 
         while running:
             timeout = 0.015 if mode == "PENDING" else 0.5
-            rlist, _, _ = select.select([touch_src.fd, srv], [], [], timeout)
+            if voldown_down and not chord_triggered and not voldown_emitted:
+                remain = 0.150 - (time.monotonic() - voldown_down_t)
+                if remain <= 0:
+                    voldown_emitted = True
+                    vkbd.write(e.EV_KEY, e.KEY_VOLUMEDOWN, 1)
+                    vkbd.syn()
+                else:
+                    timeout = min(timeout, max(0.005, remain))
+
+            watch_fds = [touch_src.fd, srv]
+            if keys_src:
+                watch_fds.append(keys_src.fd)
+
+            rlist, _, _ = select.select(watch_fds, [], [], timeout)
+
+            if voldown_down and not chord_triggered and not voldown_emitted:
+                if (time.monotonic() - voldown_down_t) >= 0.150:
+                    voldown_emitted = True
+                    vkbd.write(e.EV_KEY, e.KEY_VOLUMEDOWN, 1)
+                    vkbd.syn()
 
             if mode == "PENDING" and (time.monotonic() - pending_t0) >= 0.080:
                 enter_passthrough(pending_buf)
@@ -477,6 +533,68 @@ def main():
                     elif "up" in pkt:
                         vkbd.write(e.EV_KEY, int(pkt["up"]), 0); vkbd.syn()
                 except Exception:
+                    pass
+
+            if keys_src and keys_src.fd in rlist:
+                try:
+                    for ev in keys_src.read():
+                        if ev.type == e.EV_KEY:
+                            if ev.code == e.KEY_VOLUMEUP:
+                                vkbd.write(e.EV_KEY, e.KEY_VOLUMEUP, ev.value)
+                                vkbd.syn()
+
+                            elif ev.code == e.KEY_POWER:
+                                if ev.value == 1:
+                                    power_down = True
+                                    power_down_t = time.monotonic()
+                                    if not is_screen_on():
+                                        run_user_cmd(["/usr/local/bin/gta8-power-toggle", "on"])
+                                        chord_triggered = True
+                                    elif voldown_down:
+                                        chord_triggered = True
+                                        if voldown_emitted:
+                                            vkbd.write(e.EV_KEY, e.KEY_VOLUMEDOWN, 0)
+                                            vkbd.syn()
+                                            voldown_emitted = False
+                                        run_user_cmd(["/usr/local/bin/gta8-screenshot"])
+                                elif ev.value == 0:
+                                    power_down = False
+                                    if chord_triggered:
+                                        if not voldown_down:
+                                            chord_triggered = False
+                                    else:
+                                        press_dur = time.monotonic() - power_down_t
+                                        if press_dur < 1.0:
+                                            run_user_cmd(["/usr/local/bin/gta8-power-toggle"])
+                                        else:
+                                            run_user_cmd(["/usr/local/bin/gta8-quick-settings"])
+
+                            elif ev.code == e.KEY_VOLUMEDOWN:
+                                if ev.value == 1:
+                                    voldown_down = True
+                                    voldown_down_t = time.monotonic()
+                                    if power_down and is_screen_on():
+                                        chord_triggered = True
+                                        run_user_cmd(["/usr/local/bin/gta8-screenshot"])
+                                    else:
+                                        voldown_emitted = False
+                                elif ev.value == 0:
+                                    voldown_down = False
+                                    if chord_triggered:
+                                        if not power_down:
+                                            chord_triggered = False
+                                    else:
+                                        if not voldown_emitted:
+                                            vkbd.write(e.EV_KEY, e.KEY_VOLUMEDOWN, 1)
+                                            vkbd.syn()
+                                            time.sleep(0.01)
+                                            vkbd.write(e.EV_KEY, e.KEY_VOLUMEDOWN, 0)
+                                            vkbd.syn()
+                                        else:
+                                            vkbd.write(e.EV_KEY, e.KEY_VOLUMEDOWN, 0)
+                                            vkbd.syn()
+                                            voldown_emitted = False
+                except BlockingIOError:
                     pass
 
             if touch_src.fd in rlist:
@@ -501,6 +619,11 @@ def main():
                 except BlockingIOError:
                     pass
     finally:
+        if keys_src:
+            try: keys_src.ungrab()
+            except Exception: pass
+            try: keys_src.close()
+            except Exception: pass
         try: touch_src.ungrab()
         except Exception: pass
         try: touch_src.close()

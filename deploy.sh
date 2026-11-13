@@ -45,6 +45,7 @@ install -m 755 "${BASE_DIR}/scripts/boot-android" /usr/local/bin/
 install -m 755 "${BASE_DIR}/scripts/helium-wayland" /usr/local/bin/
 install -m 755 "${BASE_DIR}/scripts/gta8-performance-mode" /usr/local/bin/
 install -m 755 "${BASE_DIR}/scripts/panvk-run" /usr/local/bin/
+install -m 755 "${BASE_DIR}/scripts/gta8-screenshot" /usr/local/bin/
 install -m 755 "${BASE_DIR}/scripts/gta8-input-daemon" /usr/local/sbin/
 
 echo "[+] 3. Installing systemd units..."

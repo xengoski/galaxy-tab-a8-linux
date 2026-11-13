@@ -1,0 +1,38 @@
+#!/usr/bin/env bash
+TARGET_USER="droidian"
+TARGET_UID="32011"
+DIR="/home/${TARGET_USER}/Pictures/Screenshots"
+mkdir -p "$DIR" 2>/dev/null || true
+
+TIMESTAMP=$(date +"%Y-%m-%d_%H-%M-%S")
+FILE="${DIR}/Screenshot_${TIMESTAMP}.png"
+
+if [ "$(id -u)" -eq 0 ]; then
+    chown "${TARGET_USER}:${TARGET_USER}" "$DIR" 2>/dev/null || true
+    su - "${TARGET_USER}" -c "WAYLAND_DISPLAY=wayland-0 XDG_RUNTIME_DIR=/run/user/${TARGET_UID} grim '${FILE}'"
+else
+    export WAYLAND_DISPLAY="wayland-0"
+    export XDG_RUNTIME_DIR="/run/user/${TARGET_UID}"
+    grim "${FILE}"
+fi
+
+if [ -f "${FILE}" ]; then
+    [ "$(id -u)" -eq 0 ] && chown "${TARGET_USER}:${TARGET_USER}" "${FILE}" 2>/dev/null || true
+    
+    # Visual notification
+    if [ "$(id -u)" -eq 0 ]; then
+        su - "${TARGET_USER}" -c "WAYLAND_DISPLAY=wayland-0 XDG_RUNTIME_DIR=/run/user/${TARGET_UID} notify-send -a 'Screenshot' -i '${FILE}' 'Screenshot Captured' 'Saved to Pictures/Screenshots/'" >/dev/null 2>&1 &
+    else
+        notify-send -a "Screenshot" -i "${FILE}" "Screenshot Captured" "Saved to Pictures/Screenshots/" >/dev/null 2>&1 &
+    fi
+    
+    # Shutter sound
+    SOUND="/usr/share/sounds/freedesktop/stereo/screen-capture.oga"
+    if [ -f "$SOUND" ]; then
+        if [ "$(id -u)" -eq 0 ]; then
+            su - "${TARGET_USER}" -c "pw-play '$SOUND' 2>/dev/null || paplay '$SOUND' 2>/dev/null" >/dev/null 2>&1 &
+        else
+            pw-play "$SOUND" >/dev/null 2>&1 &
+        fi
+    fi
+fi

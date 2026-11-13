@@ -70,3 +70,18 @@ The tablet touchscreen uses `/usr/local/sbin/gta8-input-daemon` to listen direct
 - **3-Finger Swipe:** Workspace switching (`Super+Left`, `Super+Right` injected directly into Wayfire compositor).
 - **2-Finger Tap:** Emulates right-click (`BTN_RIGHT`).
 - **3-Finger Tap:** Emulates middle-click (`BTN_MIDDLE`).
+
+---
+
+## 4. Hardware Button Shortcuts & Android-Style Screenshot
+
+The hardware physical buttons (`KEY_POWER`, `KEY_VOLUMEDOWN`, `KEY_VOLUMEUP`) on `/dev/input/event4` (`gpio-keys`) are managed with low-latency chord detection inside `gta8-input-daemon`:
+
+| Button / Combination | Action | Details |
+|---|---|---|
+| **Power (Short Tap)** | Display Toggle | Turns off/on backlight and outputs via `wlopm` & `gta8-power-toggle`. Touch when screen is off wakes instantly. |
+| **Power (Hold > 1.0s)** | Quick Settings | Opens Quick Settings & status panel (`gta8-quick-settings`). |
+| **Volume Up** | Volume +5% | Injects `KEY_VOLUMEUP` into Wayfire / PulseAudio sink. |
+| **Volume Down** | Volume -5% | Injects `KEY_VOLUMEDOWN` into Wayfire / PulseAudio sink (with 150ms chord disambiguation window). |
+| **Power + Volume Down** | **Android-Style Screenshot** | Intercepts chord, cancels screen blanking and volume change, executes `/usr/local/bin/gta8-screenshot`: captures full 1920×1200 Wayland PNG to `~/Pictures/Screenshots/`, displays desktop notification with thumbnail preview, and plays camera shutter sound (`pw-play`). |
+
